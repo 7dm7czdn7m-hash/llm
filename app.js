@@ -215,12 +215,13 @@ function initPWAInstall() {
 async function ensureLLMLoaded(showProgress = false) {
     // Если уже загружена - возвращаем сразу
     if (llmLoaded && llmEngine) {
+        console.log('✅ Модель уже загружена');
         return llmEngine;
     }
 
     // Если уже идет загрузка - ждём
     if (llmLoading) {
-        console.log('Модель уже загружается, ожидание...');
+        console.log('⏳ Модель уже загружается, ожидание...');
         // Ждём пока загрузится
         while (llmLoading) {
             await new Promise(resolve => setTimeout(resolve, 500));
@@ -235,35 +236,50 @@ async function ensureLLMLoaded(showProgress = false) {
     llmLoading = true;
 
     try {
-        console.log('Начинается загрузка модели LLM...');
+        console.log('📥 Начинается загрузка модели LLM...');
+
+        // Проверка наличия WebLLM библиотеки
+        if (typeof window.webllm === 'undefined') {
+            console.error('❌ WebLLM библиотека не загружена!');
+            throw new Error('WebLLM библиотека не загружена. Проверьте подключение к интернету.');
+        }
+
+        console.log('✅ WebLLM библиотека найдена:', window.webllm);
 
         if (showProgress) {
             document.getElementById('processing-title').textContent = 'Загрузка модели ИИ...';
-            document.getElementById('processing-text').textContent = 'Первый запуск займёт несколько минут (~600MB)';
+            document.getElementById('processing-text').textContent = 'Первый запуск: загрузка ~600MB. Может занять 3-5 минут.';
         }
 
         // Проверка поддержки WebGPU
-        if (!('gpu' in navigator)) {
-            console.warn('WebGPU не поддерживается, будет использован CPU (медленнее)');
+        if ('gpu' in navigator) {
+            console.log('✅ WebGPU поддерживается');
+        } else {
+            console.warn('⚠️ WebGPU не поддерживается, будет использован CPU (медленнее)');
         }
 
         // Инициализация WebLLM
         if (!llmEngine) {
+            console.log('Создание MLCEngine...');
             llmEngine = new window.webllm.MLCEngine();
 
             // Обновление прогресса
             llmEngine.setInitProgressCallback((progress) => {
                 const percent = Math.round(progress.progress * 100);
-                console.log(`Загрузка модели: ${percent}%`);
+                console.log(`📊 Загрузка модели: ${percent}% - ${progress.text}`);
 
                 if (showProgress) {
                     document.getElementById('processing-text').textContent =
                         `Загрузка: ${percent}% - ${progress.text || 'Загрузка модели...'}`;
                 }
             });
+
+            console.log('✅ MLCEngine создан');
         }
 
         // Загрузка модели DeepSeek-R1-Distill-Qwen-1.5B
+        console.log('🚀 Начинаем загрузку модели DeepSeek-R1-Distill-Qwen-1.5B...');
+
         await llmEngine.reload('DeepSeek-R1-Distill-Qwen-1.5B-q4f16_1-MLC', {
             temperature: 0.7,
             top_p: 0.9,
@@ -272,15 +288,16 @@ async function ensureLLMLoaded(showProgress = false) {
         llmLoaded = true;
         llmLoading = false;
 
-        console.log('Модель LLM успешно загружена');
-        showStatus('Модель ИИ готова! Теперь можно решать задачи офлайн.', 'success');
+        console.log('✅ Модель LLM успешно загружена!');
+        showStatus('✅ Модель ИИ готова! Теперь можно решать задачи офлайн.', 'success');
 
         return llmEngine;
 
     } catch (error) {
         llmLoading = false;
         llmLoaded = false;
-        console.error('Ошибка загрузки модели:', error);
+        console.error('❌ ОШИБКА загрузки модели:', error);
+        console.error('Детали ошибки:', error.message, error.stack);
         throw error;
     }
 }
@@ -330,6 +347,9 @@ function initEventListeners() {
     // Обновление статуса офлайн
     window.addEventListener('online', updateOfflineStatus);
     window.addEventListener('offline', updateOfflineStatus);
+
+    // Кнопка очистки кеша
+    document.getElementById('clear-cache-btn').addEventListener('click', clearCacheAndReload);
 }
 
 // ==================== РАБОТА С ИЗОБРАЖЕНИЯМИ ====================
@@ -478,10 +498,25 @@ async function solveProblem() {
 async function generateSolution(problemText) {
     // Загружаем модель если ещё не загружена
     try {
+        console.log('🔄 Проверка загрузки модели...');
         await ensureLLMLoaded(true);
+        console.log('✅ Модель готова к генерации');
     } catch (error) {
-        console.error('Не удалось загрузить модель:', error);
-        throw new Error('Не удалось загрузить модель ИИ. Проверьте интернет-соединение (нужно ~600MB в первый раз).');
+        console.error('❌ Не удалось загрузить модель:', error);
+
+        // Показываем пользователю распознанный текст хотя бы
+        let errorMsg = 'Не удалось загрузить модель ИИ.\n\n';
+
+        if (error.message.includes('WebLLM библиотека')) {
+            errorMsg += '🌐 Проблема: CDN библиотека не загрузилась.\n';
+            errorMsg += '💡 Решение: Проверьте интернет и обновите страницу (F5).\n\n';
+        } else {
+            errorMsg += `Ошибка: ${error.message}\n\n`;
+        }
+
+        errorMsg += '📝 Распознанный текст вы можете скопировать выше и решить вручную.';
+
+        throw new Error(errorMsg);
     }
 
     const prompt = `Ты эксперт по математике и химии для 11 класса. Реши следующую задачу пошагово на русском языке.
@@ -499,16 +534,20 @@ async function generateSolution(problemText) {
         document.getElementById('processing-title').textContent = 'ИИ решает задачу...';
         document.getElementById('processing-text').textContent = 'Анализирую условие...';
 
+        console.log('🤖 Отправка запроса к модели...');
+
         const response = await llmEngine.chat.completions.create({
             messages: [{ role: 'user', content: prompt }],
             temperature: 0.7,
             max_tokens: 2000,
         });
 
+        console.log('✅ Получен ответ от модели');
+
         const solution = response.choices[0].message.content;
         return solution;
     } catch (error) {
-        console.error('Ошибка генерации:', error);
+        console.error('❌ Ошибка генерации решения:', error);
         throw new Error('Не удалось получить решение от ИИ: ' + error.message);
     }
 }
@@ -662,6 +701,44 @@ function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+}
+
+// Очистка кеша и перезагрузка
+async function clearCacheAndReload() {
+    if (!confirm('Это удалит весь кеш (включая загруженную модель ~600MB) и перезагрузит страницу. Продолжить?')) {
+        return;
+    }
+
+    try {
+        console.log('🗑️ Очистка кеша...');
+
+        // Очистка всех кешей
+        const cacheNames = await caches.keys();
+        await Promise.all(cacheNames.map(name => caches.delete(name)));
+        console.log('✅ Все кеши удалены');
+
+        // Удаление Service Worker
+        if ('serviceWorker' in navigator) {
+            const registrations = await navigator.serviceWorker.getRegistrations();
+            await Promise.all(registrations.map(reg => reg.unregister()));
+            console.log('✅ Service Worker удален');
+        }
+
+        // Очистка IndexedDB
+        if (db) {
+            db.close();
+        }
+        indexedDB.deleteDatabase(DB_NAME);
+        console.log('✅ IndexedDB очищена');
+
+        // Перезагрузка страницы
+        alert('Кеш очищен! Страница перезагрузится.');
+        window.location.reload(true);
+
+    } catch (error) {
+        console.error('❌ Ошибка очистки кеша:', error);
+        alert('Ошибка очистки кеша: ' + error.message);
+    }
 }
 
 // Инициализация статуса при загрузке
