@@ -1,10 +1,10 @@
 const CACHE_NAME = 'math-chem-solver-v1';
 const urlsToCache = [
-    '/',
-    '/index.html',
-    '/styles.css',
-    '/app.js',
-    '/manifest.json',
+    './',
+    './index.html',
+    './styles.css',
+    './app.js',
+    './manifest.json',
     'https://cdn.jsdelivr.net/npm/@mlc-ai/web-llm@0.2.46/lib/index.min.js',
     'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js'
 ];
