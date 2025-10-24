@@ -1,13 +1,19 @@
 // ==================== ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ====================
 let llmEngine = null;
+let llmSupportsModelParameter = false;
+let llmInitPromise = null;
+let lastLLMInitError = null;
 let tesseractWorker = null;
 let currentImage = null;
 let deferredPrompt = null;
 let db = null;
+let webllmLoadPromise = null;
 
 const DB_NAME = 'MathChemSolver';
 const DB_VERSION = 1;
 const STORE_NAME = 'solutions';
+const MODEL_ID = 'DeepSeek-R1-Distill-Qwen-1.5B-q4f16_1-MLC';
+const WEBLLM_SCRIPT_URL = 'https://cdn.jsdelivr.net/npm/@mlc-ai/web-llm@0.2.46/lib/index.min.js';
 
 // ==================== ИНИЦИАЛИЗАЦИЯ ====================
 document.addEventListener('DOMContentLoaded', async () => {
@@ -37,7 +43,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     initEventListeners();
 
     // Загрузка модели
-    await initLLM();
+    try {
+        await startLLMInitialization();
+    } catch (error) {
+        console.error('Первичная инициализация LLM завершилась ошибкой', error);
+    }
 });
 
 // ==================== БАЗА ДАННЫХ ====================
@@ -207,24 +217,102 @@ async function initLLM() {
             throw new Error('WebGPU не поддерживается. Требуется современный браузер.');
         }
 
+        await ensureWebLLMLoaded();
+
+        if (!window.webllm) {
+            throw new Error('Библиотека WebLLM недоступна. Проверьте подключение к интернету.');
+        }
+
         loadingStatus.textContent = 'Инициализация WebLLM...';
 
-        // Инициализация WebLLM
-        llmEngine = new window.webllm.MLCEngine();
-
-        // Обновление прогресса
-        llmEngine.setInitProgressCallback((progress) => {
+        const handleProgress = (progress) => {
             const percent = Math.round(progress.progress * 100);
             progressFill.style.width = `${percent}%`;
             progressText.textContent = `${percent}%`;
             loadingStatus.textContent = progress.text || 'Загрузка модели...';
-        });
+        };
 
         // Загрузка модели DeepSeek-R1-Distill-Qwen-1.5B
-        await llmEngine.reload('DeepSeek-R1-Distill-Qwen-1.5B-q4f16_1-MLC', {
-            temperature: 0.7,
-            top_p: 0.9,
-        });
+        let engine = null;
+        let supportsModelParameter = false;
+
+        if (typeof window.webllm.CreateMLCEngine === 'function') {
+            engine = await window.webllm.CreateMLCEngine({
+                modelId: MODEL_ID,
+                initProgressCallback: handleProgress,
+            });
+            supportsModelParameter = true;
+        } else {
+            const legacyNamespace = window.webllm || {};
+            const legacyAttempts = [];
+
+            if (typeof legacyNamespace.createMLCEngine === 'function') {
+                legacyAttempts.push(async () =>
+                    legacyNamespace.createMLCEngine(MODEL_ID, {
+                        initProgressCallback: handleProgress,
+                    })
+                );
+            }
+
+            const LegacyEngineCtor = legacyNamespace.MLCEngine;
+            if (LegacyEngineCtor) {
+                if (typeof LegacyEngineCtor.create === 'function') {
+                    legacyAttempts.push(async () =>
+                        LegacyEngineCtor.create(MODEL_ID, {
+                            initProgressCallback: handleProgress,
+                        })
+                    );
+                }
+
+                if (typeof LegacyEngineCtor === 'function') {
+                    legacyAttempts.push(async () => {
+                        const instance = new LegacyEngineCtor();
+
+                        if (typeof instance.setInitProgressCallback === 'function') {
+                            instance.setInitProgressCallback(handleProgress);
+                        } else if (typeof instance.setProgressCallback === 'function') {
+                            instance.setProgressCallback(handleProgress);
+                        }
+
+                        const reloadOptions = {
+                            temperature: 0.7,
+                            top_p: 0.9,
+                        };
+
+                        if (typeof instance.reload === 'function') {
+                            await instance.reload(MODEL_ID, reloadOptions);
+                        } else if (typeof instance.loadModel === 'function') {
+                            await instance.loadModel(MODEL_ID, reloadOptions);
+                        } else if (typeof instance.init === 'function') {
+                            await instance.init(MODEL_ID, reloadOptions);
+                        } else {
+                            throw new Error('Legacy MLCEngine не поддерживает загрузку модели');
+                        }
+
+                        return instance;
+                    });
+                }
+            }
+
+            let lastError = null;
+            for (const attempt of legacyAttempts) {
+                try {
+                    engine = await attempt();
+                    break;
+                } catch (legacyError) {
+                    lastError = legacyError;
+                    console.warn('Не удалось инициализировать WebLLM через устаревший API', legacyError);
+                }
+            }
+
+            if (!engine) {
+                throw lastError || new Error('Не удалось инициализировать WebLLM. Обновите приложение.');
+            }
+        }
+
+        llmEngine = engine;
+        llmSupportsModelParameter = supportsModelParameter;
+        lastLLMInitError = null;
 
         console.log('Модель LLM загружена');
         showStatus('Модель ИИ готова к работе!', 'success');
@@ -233,16 +321,203 @@ async function initLLM() {
         loadingSection.classList.add('hidden');
         inputSection.classList.remove('hidden');
 
+        return llmEngine;
+
     } catch (error) {
         console.error('Ошибка загрузки модели:', error);
         loadingStatus.textContent = `Ошибка: ${error.message}`;
         showStatus(`Ошибка загрузки модели: ${error.message}`, 'error');
+
+        lastLLMInitError = error;
 
         // Fallback: показываем интерфейс даже если модель не загрузилась
         setTimeout(() => {
             loadingSection.classList.add('hidden');
             inputSection.classList.remove('hidden');
         }, 3000);
+
+        throw error;
+    }
+}
+
+function resetLLMState() {
+    if (llmEngine) {
+        try {
+            if (typeof llmEngine.dispose === 'function') {
+                llmEngine.dispose();
+            } else if (typeof llmEngine.terminate === 'function') {
+                llmEngine.terminate();
+            }
+        } catch (disposeError) {
+            console.warn('Не удалось корректно завершить предыдущий экземпляр LLM', disposeError);
+        }
+    }
+
+    llmEngine = null;
+    llmSupportsModelParameter = false;
+}
+
+function startLLMInitialization({ force = false } = {}) {
+    if (force) {
+        resetLLMState();
+        llmInitPromise = null;
+        lastLLMInitError = null;
+    }
+
+    if (llmEngine) {
+        return Promise.resolve(llmEngine);
+    }
+
+    if (!llmInitPromise) {
+        llmInitPromise = initLLM()
+            .then((engine) => engine)
+            .catch((error) => {
+                llmInitPromise = null;
+                return Promise.reject(error);
+            });
+    }
+
+    return llmInitPromise;
+}
+
+async function ensureLLMReady({ force = false } = {}) {
+    if (force) {
+        await startLLMInitialization({ force: true });
+        if (llmEngine) {
+            return llmEngine;
+        }
+        if (lastLLMInitError) {
+            throw lastLLMInitError;
+        }
+        throw new Error('Модель ИИ не загружена. Попробуйте перезагрузить страницу.');
+    }
+
+    if (llmEngine) {
+        return llmEngine;
+    }
+
+    try {
+        const engine = await startLLMInitialization();
+        if (engine) {
+            return engine;
+        }
+    } catch (error) {
+        throw error;
+    }
+
+    if (!llmEngine) {
+        try {
+            const engine = await startLLMInitialization({ force: true });
+            if (engine) {
+                return engine;
+            }
+        } catch (error) {
+            throw error;
+        }
+    }
+
+    if (llmEngine) {
+        return llmEngine;
+    }
+
+    if (lastLLMInitError) {
+        throw lastLLMInitError;
+    }
+
+    throw new Error('Модель ИИ не загружена. Попробуйте перезагрузить страницу.');
+}
+
+async function ensureWebLLMLoaded(timeoutMs = 20000) {
+    if (window.webllm) {
+        return;
+    }
+
+    if (!webllmLoadPromise) {
+        webllmLoadPromise = (async () => {
+            let script = document.querySelector(`script[src="${WEBLLM_SCRIPT_URL}"]`);
+
+            if (script && script.dataset.webllmStatus === 'error') {
+                script.remove();
+                script = null;
+            }
+
+            if (!script) {
+                script = document.createElement('script');
+                script.src = WEBLLM_SCRIPT_URL;
+                script.async = true;
+                script.crossOrigin = 'anonymous';
+                script.dataset.webllmInjected = 'true';
+                document.head.appendChild(script);
+            }
+
+            await waitForScriptLoad(script, timeoutMs);
+
+            if (!window.webllm) {
+                await waitForCondition(() => window.webllm, 2000);
+            }
+
+            if (!window.webllm) {
+                throw new Error('Библиотека WebLLM недоступна после загрузки скрипта.');
+            }
+        })().finally(() => {
+            if (!window.webllm) {
+                webllmLoadPromise = null;
+            }
+        });
+    }
+
+    return webllmLoadPromise;
+}
+
+function waitForScriptLoad(script, timeoutMs) {
+    return new Promise((resolve, reject) => {
+        let settled = false;
+
+        const cleanup = () => {
+            script.removeEventListener('load', onLoad);
+            script.removeEventListener('error', onError);
+            clearTimeout(timeoutId);
+        };
+
+        const onLoad = () => {
+            if (settled) return;
+            settled = true;
+            script.dataset.webllmStatus = 'loaded';
+            cleanup();
+            resolve();
+        };
+
+        const onError = () => {
+            if (settled) return;
+            settled = true;
+            script.dataset.webllmStatus = 'error';
+            cleanup();
+            reject(new Error('Не удалось загрузить библиотеку WebLLM. Проверьте подключение к интернету.'));
+        };
+
+        const timeoutId = setTimeout(() => {
+            if (settled) return;
+            settled = true;
+            cleanup();
+            reject(new Error('Тайм-аут при загрузке библиотеки WebLLM.'));
+        }, timeoutMs);
+
+        script.addEventListener('load', onLoad, { once: true });
+        script.addEventListener('error', onError, { once: true });
+
+        if (script.readyState === 'complete' || script.readyState === 'loaded') {
+            onLoad();
+        }
+    });
+}
+
+async function waitForCondition(predicate, timeoutMs, intervalMs = 50) {
+    const start = Date.now();
+    while (!predicate()) {
+        if (Date.now() - start > timeoutMs) {
+            break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, intervalMs));
     }
 }
 
@@ -417,9 +692,7 @@ async function solveProblem() {
 }
 
 async function generateSolution(problemText) {
-    if (!llmEngine) {
-        throw new Error('Модель ИИ не загружена. Попробуйте перезагрузить страницу.');
-    }
+    const engine = await ensureLLMReady();
 
     const prompt = `Ты эксперт по математике и химии для 11 класса. Реши следующую задачу пошагово на русском языке.
 
@@ -433,11 +706,17 @@ async function generateSolution(problemText) {
 Решение:`;
 
     try {
-        const response = await llmEngine.chat.completions.create({
+        const request = {
             messages: [{ role: 'user', content: prompt }],
             temperature: 0.7,
             max_tokens: 2000,
-        });
+        };
+
+        if (llmSupportsModelParameter) {
+            request.model = MODEL_ID;
+        }
+
+        const response = await engine.chat.completions.create(request);
 
         const solution = response.choices[0].message.content;
         return solution;
