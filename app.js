@@ -1,5 +1,6 @@
 // ==================== ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ====================
 let llmEngine = null;
+let llmSupportsModelParameter = false;
 let tesseractWorker = null;
 let currentImage = null;
 let deferredPrompt = null;
@@ -8,6 +9,7 @@ let db = null;
 const DB_NAME = 'MathChemSolver';
 const DB_VERSION = 1;
 const STORE_NAME = 'solutions';
+const MODEL_ID = 'DeepSeek-R1-Distill-Qwen-1.5B-q4f16_1-MLC';
 
 // ==================== ИНИЦИАЛИЗАЦИЯ ====================
 document.addEventListener('DOMContentLoaded', async () => {
@@ -207,24 +209,37 @@ async function initLLM() {
             throw new Error('WebGPU не поддерживается. Требуется современный браузер.');
         }
 
+        if (!window.webllm) {
+            throw new Error('Библиотека WebLLM недоступна. Проверьте подключение к интернету.');
+        }
+
         loadingStatus.textContent = 'Инициализация WebLLM...';
 
-        // Инициализация WebLLM
-        llmEngine = new window.webllm.MLCEngine();
-
-        // Обновление прогресса
-        llmEngine.setInitProgressCallback((progress) => {
+        const handleProgress = (progress) => {
             const percent = Math.round(progress.progress * 100);
             progressFill.style.width = `${percent}%`;
             progressText.textContent = `${percent}%`;
             loadingStatus.textContent = progress.text || 'Загрузка модели...';
-        });
+        };
 
         // Загрузка модели DeepSeek-R1-Distill-Qwen-1.5B
-        await llmEngine.reload('DeepSeek-R1-Distill-Qwen-1.5B-q4f16_1-MLC', {
-            temperature: 0.7,
-            top_p: 0.9,
-        });
+        if (typeof window.webllm.CreateMLCEngine === 'function') {
+            llmEngine = await window.webllm.CreateMLCEngine({
+                modelId: MODEL_ID,
+                initProgressCallback: handleProgress,
+            });
+            llmSupportsModelParameter = true;
+        } else if (typeof window.webllm.MLCEngine === 'function') {
+            llmEngine = new window.webllm.MLCEngine();
+            llmEngine.setInitProgressCallback(handleProgress);
+            await llmEngine.reload(MODEL_ID, {
+                temperature: 0.7,
+                top_p: 0.9,
+            });
+            llmSupportsModelParameter = false;
+        } else {
+            throw new Error('Не удалось инициализировать WebLLM. Обновите приложение.');
+        }
 
         console.log('Модель LLM загружена');
         showStatus('Модель ИИ готова к работе!', 'success');
@@ -433,11 +448,17 @@ async function generateSolution(problemText) {
 Решение:`;
 
     try {
-        const response = await llmEngine.chat.completions.create({
+        const request = {
             messages: [{ role: 'user', content: prompt }],
             temperature: 0.7,
             max_tokens: 2000,
-        });
+        };
+
+        if (llmSupportsModelParameter) {
+            request.model = MODEL_ID;
+        }
+
+        const response = await llmEngine.chat.completions.create(request);
 
         const solution = response.choices[0].message.content;
         return solution;
