@@ -10,9 +10,14 @@
 
     <title>Решатель Задач</title>
 
-    <link rel="manifest" href="manifest.json">
-    <link rel="stylesheet" href="styles.css">
-    <link rel="apple-touch-icon" href="icons/icon-192.png">
+    <!-- Определяем базовый путь для GitHub Pages -->
+    <script>
+        window.BASE_PATH = window.location.pathname.includes('/llm/') ? '/llm' : '';
+    </script>
+
+    <link rel="manifest" href="./manifest.json">
+    <link rel="stylesheet" href="./styles.css">
+    <link rel="apple-touch-icon" href="./icons/icon-192.png">
 
     <!-- Preload критичных ресурсов -->
     <link rel="preconnect" href="https://cdn.jsdelivr.net">

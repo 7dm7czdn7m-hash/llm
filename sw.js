@@ -1,156 +1,243 @@
-const CACHE_NAME = 'math-chem-solver-v1';
-const urlsToCache = [
-    './',
-    './index.html',
-    './styles.css',
-    './app.js',
-    './manifest.json',
+// Определяем базовый путь автоматически
+const BASE_PATH = self.location.pathname.replace(/\/sw\.js$/, '');
+const CACHE_NAME = 'math-chem-solver-v2';
+const RUNTIME_CACHE = 'runtime-cache-v2';
+
+// Основные файлы для кеширования
+const CORE_ASSETS = [
+    `${BASE_PATH}/`,
+    `${BASE_PATH}/index.html`,
+    `${BASE_PATH}/styles.css`,
+    `${BASE_PATH}/app.js`,
+    `${BASE_PATH}/manifest.json`,
+    `${BASE_PATH}/icons/icon-192.png`,
+    `${BASE_PATH}/icons/icon-512.png`
+];
+
+// CDN ресурсы
+const CDN_RESOURCES = [
     'https://cdn.jsdelivr.net/npm/@mlc-ai/web-llm@0.2.46/lib/index.min.js',
     'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js'
 ];
 
-// Установка Service Worker
+// ==================== УСТАНОВКА ====================
 self.addEventListener('install', (event) => {
-    console.log('Service Worker: Установка');
+    console.log('[SW] Установка Service Worker, BASE_PATH:', BASE_PATH);
 
     event.waitUntil(
-        caches.open(CACHE_NAME)
-            .then((cache) => {
-                console.log('Service Worker: Кеширование файлов');
-                return cache.addAll(urlsToCache.map(url => {
-                    return new Request(url, { cache: 'reload' });
-                })).catch((error) => {
-                    console.error('Ошибка кеширования:', error);
-                });
-            })
+        (async () => {
+            try {
+                // Кешируем основные файлы
+                const cache = await caches.open(CACHE_NAME);
+                console.log('[SW] Кеширование основных файлов...');
+
+                // Кешируем по одному для лучшей отладки
+                for (const url of CORE_ASSETS) {
+                    try {
+                        await cache.add(new Request(url, { cache: 'reload' }));
+                        console.log('[SW] Закеширован:', url);
+                    } catch (error) {
+                        console.warn('[SW] Не удалось закешировать:', url, error);
+                    }
+                }
+
+                // Кешируем CDN ресурсы
+                for (const url of CDN_RESOURCES) {
+                    try {
+                        const response = await fetch(url);
+                        if (response.ok) {
+                            await cache.put(url, response);
+                            console.log('[SW] Закеширован CDN:', url);
+                        }
+                    } catch (error) {
+                        console.warn('[SW] CDN недоступен:', url);
+                    }
+                }
+
+                console.log('[SW] Установка завершена');
+            } catch (error) {
+                console.error('[SW] Ошибка при установке:', error);
+            }
+        })()
     );
 
-    // Принудительная активация нового Service Worker
+    // Принудительная активация
     self.skipWaiting();
 });
 
-// Активация Service Worker
+// ==================== АКТИВАЦИЯ ====================
 self.addEventListener('activate', (event) => {
-    console.log('Service Worker: Активация');
+    console.log('[SW] Активация Service Worker');
 
     event.waitUntil(
-        caches.keys().then((cacheNames) => {
-            return Promise.all(
+        (async () => {
+            // Удаляем старые кеши
+            const cacheNames = await caches.keys();
+            await Promise.all(
                 cacheNames.map((cacheName) => {
-                    if (cacheName !== CACHE_NAME) {
-                        console.log('Service Worker: Удаление старого кеша', cacheName);
+                    if (cacheName !== CACHE_NAME && cacheName !== RUNTIME_CACHE) {
+                        console.log('[SW] Удаление старого кеша:', cacheName);
                         return caches.delete(cacheName);
                     }
                 })
             );
-        })
-    );
 
-    // Контроль всех клиентов
-    self.clients.claim();
+            // Контролируем все клиенты
+            await self.clients.claim();
+            console.log('[SW] Активация завершена');
+        })()
+    );
 });
 
-// Перехват запросов
+// ==================== ПЕРЕХВАТ ЗАПРОСОВ ====================
 self.addEventListener('fetch', (event) => {
     const { request } = event;
+    const url = new URL(request.url);
 
-    // Игнорируем запросы к chrome-extension
-    if (request.url.startsWith('chrome-extension://')) {
-        return;
-    }
-
-    // Игнорируем запросы браузера
-    if (request.url.includes('browser-sync')) {
-        return;
-    }
-
-    // Стратегия: Cache First для статических ресурсов
+    // Игнорируем некоторые запросы
     if (
-        request.url.includes('.css') ||
-        request.url.includes('.js') ||
-        request.url.includes('.html') ||
-        request.url.includes('manifest.json') ||
-        request.url.includes('/icons/')
+        url.protocol === 'chrome-extension:' ||
+        url.hostname.includes('browser-sync') ||
+        request.method !== 'GET'
     ) {
-        event.respondWith(
-            caches.match(request).then((cachedResponse) => {
-                if (cachedResponse) {
-                    return cachedResponse;
-                }
-
-                return fetch(request).then((response) => {
-                    // Не кешируем ошибочные ответы
-                    if (!response || response.status !== 200 || response.type === 'error') {
-                        return response;
-                    }
-
-                    const responseToCache = response.clone();
-                    caches.open(CACHE_NAME).then((cache) => {
-                        cache.put(request, responseToCache);
-                    });
-
-                    return response;
-                });
-            }).catch(() => {
-                // Возвращаем базовый HTML если офлайн
-                if (request.destination === 'document') {
-                    return caches.match('/index.html');
-                }
-            })
-        );
         return;
     }
 
-    // Для запросов к WebLLM и Tesseract - используем Network First
-    if (
-        request.url.includes('cdn.jsdelivr.net') ||
-        request.url.includes('huggingface.co') ||
-        request.url.includes('tessdata')
-    ) {
-        event.respondWith(
-            fetch(request).then((response) => {
-                // Кешируем успешные ответы
-                if (response && response.status === 200) {
-                    const responseToCache = response.clone();
-                    caches.open(CACHE_NAME).then((cache) => {
-                        cache.put(request, responseToCache);
-                    });
-                }
-                return response;
-            }).catch(() => {
-                // Если сеть недоступна, берём из кеша
-                return caches.match(request);
-            })
-        );
-        return;
-    }
-
-    // Для остальных запросов - Network First
-    event.respondWith(
-        fetch(request).catch(() => {
-            return caches.match(request);
-        })
-    );
+    // Стратегия для разных типов ресурсов
+    event.respondWith(handleFetch(request));
 });
 
-// Обработка сообщений от клиента
+async function handleFetch(request) {
+    const url = new URL(request.url);
+
+    try {
+        // 1. Статические файлы приложения - Cache First
+        if (isAppResource(url)) {
+            return await cacheFirst(request, CACHE_NAME);
+        }
+
+        // 2. CDN библиотеки - Cache First с долгим хранением
+        if (isCDNResource(url)) {
+            return await cacheFirst(request, CACHE_NAME);
+        }
+
+        // 3. HuggingFace модели и Tessdata - Cache First (большие файлы)
+        if (isLargeModelResource(url)) {
+            return await cacheFirst(request, RUNTIME_CACHE);
+        }
+
+        // 4. Остальное - Network First
+        return await networkFirst(request, RUNTIME_CACHE);
+
+    } catch (error) {
+        console.error('[SW] Ошибка обработки запроса:', request.url, error);
+
+        // Fallback для HTML
+        if (request.destination === 'document') {
+            const cachedIndex = await caches.match(`${BASE_PATH}/index.html`);
+            if (cachedIndex) return cachedIndex;
+        }
+
+        // Возвращаем ошибку
+        return new Response('Офлайн режим. Ресурс недоступен.', {
+            status: 503,
+            statusText: 'Service Unavailable',
+            headers: { 'Content-Type': 'text/plain' }
+        });
+    }
+}
+
+// ==================== СТРАТЕГИИ КЕШИРОВАНИЯ ====================
+
+// Cache First - сначала кеш, потом сеть
+async function cacheFirst(request, cacheName) {
+    const cached = await caches.match(request);
+
+    if (cached) {
+        console.log('[SW] Из кеша:', request.url);
+        return cached;
+    }
+
+    console.log('[SW] Загрузка из сети:', request.url);
+    const response = await fetch(request);
+
+    if (response.ok) {
+        const cache = await caches.open(cacheName);
+        cache.put(request, response.clone());
+    }
+
+    return response;
+}
+
+// Network First - сначала сеть, потом кеш
+async function networkFirst(request, cacheName) {
+    try {
+        const response = await fetch(request);
+
+        if (response.ok) {
+            const cache = await caches.open(cacheName);
+            cache.put(request, response.clone());
+        }
+
+        return response;
+    } catch (error) {
+        const cached = await caches.match(request);
+        if (cached) {
+            console.log('[SW] Fallback к кешу:', request.url);
+            return cached;
+        }
+        throw error;
+    }
+}
+
+// ==================== ОПРЕДЕЛЕНИЕ ТИПОВ РЕСУРСОВ ====================
+
+function isAppResource(url) {
+    return (
+        url.origin === self.location.origin &&
+        (
+            url.pathname.endsWith('.html') ||
+            url.pathname.endsWith('.css') ||
+            url.pathname.endsWith('.js') ||
+            url.pathname.endsWith('.json') ||
+            url.pathname.endsWith('.png') ||
+            url.pathname.includes('/icons/')
+        )
+    );
+}
+
+function isCDNResource(url) {
+    return (
+        url.hostname.includes('cdn.jsdelivr.net') ||
+        url.hostname.includes('unpkg.com')
+    );
+}
+
+function isLargeModelResource(url) {
+    return (
+        url.hostname.includes('huggingface.co') ||
+        url.pathname.includes('tessdata') ||
+        url.pathname.includes('.wasm') ||
+        url.pathname.includes('mlc-chat-config') ||
+        url.pathname.includes('ndarray-cache')
+    );
+}
+
+// ==================== ОБРАБОТКА СООБЩЕНИЙ ====================
 self.addEventListener('message', (event) => {
     if (event.data && event.data.type === 'SKIP_WAITING') {
         self.skipWaiting();
     }
+
+    if (event.data && event.data.type === 'CLEAR_CACHE') {
+        event.waitUntil(
+            caches.keys().then((cacheNames) => {
+                return Promise.all(
+                    cacheNames.map((cacheName) => caches.delete(cacheName))
+                );
+            })
+        );
+    }
 });
 
-// Синхронизация в фоне (опционально)
-self.addEventListener('sync', (event) => {
-    console.log('Service Worker: Фоновая синхронизация', event.tag);
-});
-
-// Обработка уведомлений (опционально)
-self.addEventListener('notificationclick', (event) => {
-    console.log('Service Worker: Клик по уведомлению', event);
-    event.notification.close();
-
-    event.waitUntil(
-        clients.openWindow('/')
-    );
-});
+console.log('[SW] Service Worker загружен, BASE_PATH:', BASE_PATH);

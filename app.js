@@ -12,15 +12,27 @@ const STORE_NAME = 'solutions';
 // ==================== ИНИЦИАЛИЗАЦИЯ ====================
 document.addEventListener('DOMContentLoaded', async () => {
     console.log('Приложение запущено');
+    console.log('Протокол:', window.location.protocol);
+    console.log('Хост:', window.location.host);
+
+    // Проверка HTTPS (нужно для камеры на iOS)
+    if (window.location.protocol !== 'https:' && window.location.hostname !== 'localhost') {
+        showStatus('⚠️ Для работы камеры требуется HTTPS. Некоторые функции могут быть недоступны.', 'warning');
+    }
 
     // Регистрация Service Worker
     if ('serviceWorker' in navigator) {
         try {
-            const registration = await navigator.serviceWorker.register('./sw.js');
+            const basePath = window.BASE_PATH || '';
+            const swPath = `${basePath}/sw.js`;
+            const registration = await navigator.serviceWorker.register(swPath, {
+                scope: `${basePath}/`
+            });
             console.log('Service Worker зарегистрирован:', registration.scope);
             updateOfflineStatus();
         } catch (error) {
             console.error('Ошибка регистрации Service Worker:', error);
+            showStatus('Service Worker не загружен. Офлайн режим недоступен.', 'warning');
         }
     }
 
@@ -296,19 +308,39 @@ function initEventListeners() {
 // ==================== РАБОТА С ИЗОБРАЖЕНИЯМИ ====================
 function handleImageUpload(event) {
     const file = event.target.files[0];
-    if (!file) return;
+    if (!file) {
+        console.log('Файл не выбран');
+        return;
+    }
+
+    console.log('Загружен файл:', file.name, 'Тип:', file.type, 'Размер:', file.size);
 
     if (!file.type.startsWith('image/')) {
-        showStatus('Пожалуйста, выберите изображение', 'error');
+        showStatus('Пожалуйста, выберите изображение (JPG, PNG, и т.д.)', 'error');
+        return;
+    }
+
+    // Проверка размера файла (макс 10MB)
+    if (file.size > 10 * 1024 * 1024) {
+        showStatus('Файл слишком большой. Максимум 10MB', 'error');
         return;
     }
 
     const reader = new FileReader();
+
+    reader.onerror = (error) => {
+        console.error('Ошибка чтения файла:', error);
+        showStatus('Не удалось загрузить изображение', 'error');
+    };
+
     reader.onload = (e) => {
         currentImage = e.target.result;
+        console.log('Изображение загружено, размер данных:', currentImage.length);
         showImagePreview(currentImage);
         updateSolveButton();
+        showStatus('Фото загружено! Теперь нажмите "Решить задачу"', 'success');
     };
+
     reader.readAsDataURL(file);
 }
 
