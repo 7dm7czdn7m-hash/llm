@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#6366f1">
+    <meta name="description" content="Офлайн решение задач по математике и химии с помощью ИИ">
+
+    <title>Решатель Задач</title>
+
+    <link rel="manifest" href="manifest.json">
+    <link rel="stylesheet" href="styles.css">
+    <link rel="apple-touch-icon" href="icons/icon-192.png">
+
+    <!-- Preload критичных ресурсов -->
+    <link rel="preconnect" href="https://cdn.jsdelivr.net">
+</head>
+<body>
+    <!-- Установка PWA -->
+    <div id="install-prompt" class="install-prompt hidden">
+        <div class="install-content">
+            <h3>Установить приложение?</h3>
+            <p>Работает полностью офлайн после установки</p>
+            <div class="install-buttons">
+                <button id="install-btn" class="btn-primary">Установить</button>
+                <button id="install-cancel" class="btn-secondary">Позже</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Header -->
+    <header class="app-header">
+        <div class="header-content">
+            <h1>🧮 Решатель Задач</h1>
+            <div class="header-controls">
+                <button id="theme-toggle" class="icon-btn" aria-label="Переключить тему">
+                    <svg class="theme-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+                    </svg>
+                </button>
+                <button id="history-btn" class="icon-btn" aria-label="История">
+                    <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                    </svg>
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="container">
+        <!-- Status Bar -->
+        <div id="status-bar" class="status-bar hidden">
+            <div class="status-content">
+                <div class="status-icon">ℹ️</div>
+                <div class="status-text"></div>
+            </div>
+        </div>
+
+        <!-- Model Loading -->
+        <div id="model-loading" class="card">
+            <h2>Загрузка модели ИИ</h2>
+            <p class="loading-info">Первая загрузка займёт несколько минут (~600MB)</p>
+            <div class="progress-container">
+                <div class="progress-bar">
+                    <div id="progress-fill" class="progress-fill" style="width: 0%"></div>
+                </div>
+                <div id="progress-text" class="progress-text">0%</div>
+            </div>
+            <div id="loading-status" class="loading-status">Инициализация...</div>
+        </div>
+
+        <!-- Input Section -->
+        <section id="input-section" class="card hidden">
+            <h2>Решить задачу</h2>
+
+            <!-- Camera/Upload Buttons -->
+            <div class="input-buttons">
+                <button id="camera-btn" class="btn-primary btn-large">
+                    <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path>
+                        <circle cx="12" cy="13" r="4"></circle>
+                    </svg>
+                    Сфотографировать задачу
+                </button>
+
+                <button id="upload-btn" class="btn-secondary btn-large">
+                    <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                        <polyline points="17 8 12 3 7 8"></polyline>
+                        <line x1="12" y1="3" x2="12" y2="15"></line>
+                    </svg>
+                    Загрузить из галереи
+                </button>
+            </div>
+
+            <!-- Hidden File Input -->
+            <input type="file" id="file-input" accept="image/*" capture="environment" style="display: none;">
+            <input type="file" id="upload-input" accept="image/*" style="display: none;">
+
+            <!-- Preview -->
+            <div id="preview-container" class="preview-container hidden">
+                <img id="preview-image" class="preview-image" alt="Загруженное изображение">
+                <button id="remove-image" class="btn-remove">✕</button>
+            </div>
+
+            <!-- Text Input -->
+            <div class="text-input-container">
+                <label for="text-input">Или введите задачу вручную:</label>
+                <textarea id="text-input"
+                          class="text-input"
+                          placeholder="Например: Решите уравнение 2x + 5 = 15"
+                          rows="4"></textarea>
+            </div>
+
+            <!-- Solve Button -->
+            <button id="solve-btn" class="btn-primary btn-large" disabled>
+                Решить задачу
+            </button>
+        </section>
+
+        <!-- Processing Section -->
+        <section id="processing-section" class="card hidden">
+            <div class="processing-content">
+                <div class="spinner"></div>
+                <h3 id="processing-title">Обработка изображения...</h3>
+                <p id="processing-text">Распознавание текста с фото</p>
+            </div>
+        </section>
+
+        <!-- Solution Section -->
+        <section id="solution-section" class="card hidden">
+            <div class="solution-header">
+                <h2>Решение</h2>
+                <button id="new-task-btn" class="btn-secondary">Новая задача</button>
+            </div>
+
+            <div id="recognized-text" class="recognized-text hidden">
+                <h3>Распознанная задача:</h3>
+                <div id="recognized-content" class="recognized-content"></div>
+            </div>
+
+            <div id="solution-content" class="solution-content"></div>
+
+            <button id="save-solution-btn" class="btn-primary">
+                Сохранить в историю
+            </button>
+        </section>
+
+        <!-- History Section -->
+        <section id="history-section" class="card hidden">
+            <div class="history-header">
+                <h2>История решений</h2>
+                <button id="close-history-btn" class="btn-secondary">Закрыть</button>
+            </div>
+
+            <div id="history-list" class="history-list">
+                <p class="empty-history">История пуста</p>
+            </div>
+
+            <button id="clear-history-btn" class="btn-danger">
+                Очистить историю
+            </button>
+        </section>
+    </main>
+
+    <!-- Footer -->
+    <footer class="app-footer">
+        <p>
+            <strong>Офлайн режим:</strong>
+            <span id="offline-status">Проверка...</span>
+        </p>
+        <p class="footer-note">
+            Работает на DeepSeek-R1-Distill-Qwen-1.5B
+        </p>
+    </footer>
+
+    <!-- Scripts -->
+    <script src="https://cdn.jsdelivr.net/npm/@mlc-ai/web-llm@0.2.46/lib/index.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+    <script src="app.js" type="module"></script>
+</body>
+</html>
