@@ -1,5 +1,7 @@
 // ==================== ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ====================
 let llmEngine = null;
+let llmLoading = false;
+let llmLoaded = false;
 let tesseractWorker = null;
 let currentImage = null;
 let deferredPrompt = null;
@@ -48,8 +50,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Инициализация событий
     initEventListeners();
 
-    // Загрузка модели
-    await initLLM();
+    // Показываем интерфейс сразу (без ожидания модели)
+    document.getElementById('model-loading').classList.add('hidden');
+    document.getElementById('input-section').classList.remove('hidden');
+
+    // Показываем статус
+    showStatus('Приложение готово! Модель ИИ загрузится при первом использовании.', 'success');
+
+    console.log('Инициализация завершена');
 });
 
 // ==================== БАЗА ДАННЫХ ====================
@@ -204,33 +212,56 @@ function initPWAInstall() {
 }
 
 // ==================== ИНИЦИАЛИЗАЦИЯ LLM ====================
-async function initLLM() {
-    const loadingSection = document.getElementById('model-loading');
-    const inputSection = document.getElementById('input-section');
-    const progressFill = document.getElementById('progress-fill');
-    const progressText = document.getElementById('progress-text');
-    const loadingStatus = document.getElementById('loading-status');
+async function ensureLLMLoaded(showProgress = false) {
+    // Если уже загружена - возвращаем сразу
+    if (llmLoaded && llmEngine) {
+        return llmEngine;
+    }
+
+    // Если уже идет загрузка - ждём
+    if (llmLoading) {
+        console.log('Модель уже загружается, ожидание...');
+        // Ждём пока загрузится
+        while (llmLoading) {
+            await new Promise(resolve => setTimeout(resolve, 500));
+        }
+        if (llmLoaded && llmEngine) {
+            return llmEngine;
+        }
+        throw new Error('Не удалось загрузить модель');
+    }
+
+    // Начинаем загрузку
+    llmLoading = true;
 
     try {
-        loadingStatus.textContent = 'Проверка поддержки WebGPU...';
+        console.log('Начинается загрузка модели LLM...');
+
+        if (showProgress) {
+            document.getElementById('processing-title').textContent = 'Загрузка модели ИИ...';
+            document.getElementById('processing-text').textContent = 'Первый запуск займёт несколько минут (~600MB)';
+        }
 
         // Проверка поддержки WebGPU
         if (!('gpu' in navigator)) {
-            throw new Error('WebGPU не поддерживается. Требуется современный браузер.');
+            console.warn('WebGPU не поддерживается, будет использован CPU (медленнее)');
         }
 
-        loadingStatus.textContent = 'Инициализация WebLLM...';
-
         // Инициализация WebLLM
-        llmEngine = new window.webllm.MLCEngine();
+        if (!llmEngine) {
+            llmEngine = new window.webllm.MLCEngine();
 
-        // Обновление прогресса
-        llmEngine.setInitProgressCallback((progress) => {
-            const percent = Math.round(progress.progress * 100);
-            progressFill.style.width = `${percent}%`;
-            progressText.textContent = `${percent}%`;
-            loadingStatus.textContent = progress.text || 'Загрузка модели...';
-        });
+            // Обновление прогресса
+            llmEngine.setInitProgressCallback((progress) => {
+                const percent = Math.round(progress.progress * 100);
+                console.log(`Загрузка модели: ${percent}%`);
+
+                if (showProgress) {
+                    document.getElementById('processing-text').textContent =
+                        `Загрузка: ${percent}% - ${progress.text || 'Загрузка модели...'}`;
+                }
+            });
+        }
 
         // Загрузка модели DeepSeek-R1-Distill-Qwen-1.5B
         await llmEngine.reload('DeepSeek-R1-Distill-Qwen-1.5B-q4f16_1-MLC', {
@@ -238,23 +269,19 @@ async function initLLM() {
             top_p: 0.9,
         });
 
-        console.log('Модель LLM загружена');
-        showStatus('Модель ИИ готова к работе!', 'success');
+        llmLoaded = true;
+        llmLoading = false;
 
-        // Переключение на основной интерфейс
-        loadingSection.classList.add('hidden');
-        inputSection.classList.remove('hidden');
+        console.log('Модель LLM успешно загружена');
+        showStatus('Модель ИИ готова! Теперь можно решать задачи офлайн.', 'success');
+
+        return llmEngine;
 
     } catch (error) {
+        llmLoading = false;
+        llmLoaded = false;
         console.error('Ошибка загрузки модели:', error);
-        loadingStatus.textContent = `Ошибка: ${error.message}`;
-        showStatus(`Ошибка загрузки модели: ${error.message}`, 'error');
-
-        // Fallback: показываем интерфейс даже если модель не загрузилась
-        setTimeout(() => {
-            loadingSection.classList.add('hidden');
-            inputSection.classList.remove('hidden');
-        }, 3000);
+        throw error;
     }
 }
 
@@ -449,8 +476,12 @@ async function solveProblem() {
 }
 
 async function generateSolution(problemText) {
-    if (!llmEngine) {
-        throw new Error('Модель ИИ не загружена. Попробуйте перезагрузить страницу.');
+    // Загружаем модель если ещё не загружена
+    try {
+        await ensureLLMLoaded(true);
+    } catch (error) {
+        console.error('Не удалось загрузить модель:', error);
+        throw new Error('Не удалось загрузить модель ИИ. Проверьте интернет-соединение (нужно ~600MB в первый раз).');
     }
 
     const prompt = `Ты эксперт по математике и химии для 11 класса. Реши следующую задачу пошагово на русском языке.
@@ -465,6 +496,9 @@ async function generateSolution(problemText) {
 Решение:`;
 
     try {
+        document.getElementById('processing-title').textContent = 'ИИ решает задачу...';
+        document.getElementById('processing-text').textContent = 'Анализирую условие...';
+
         const response = await llmEngine.chat.completions.create({
             messages: [{ role: 'user', content: prompt }],
             temperature: 0.7,
@@ -475,7 +509,7 @@ async function generateSolution(problemText) {
         return solution;
     } catch (error) {
         console.error('Ошибка генерации:', error);
-        throw new Error('Не удалось получить решение от ИИ. Проверьте подключение.');
+        throw new Error('Не удалось получить решение от ИИ: ' + error.message);
     }
 }
 
