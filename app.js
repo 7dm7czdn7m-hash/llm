@@ -1,45 +1,48 @@
-// ==================== ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ====================
-let llmEngine = null;
-let llmSupportsModelParameter = false;
+import {
+    generateGeminiSolution,
+    reviewGeminiSolution,
+    hasGeminiApiKey,
+    getGeminiApiKey,
+    setGeminiApiKey,
+    clearGeminiApiKey,
+} from './geminiClient.js';
+
 let tesseractWorker = null;
 let currentImage = null;
-let deferredPrompt = null;
 let db = null;
 
 const DB_NAME = 'MathChemSolver';
 const DB_VERSION = 1;
 const STORE_NAME = 'solutions';
-const MODEL_ID = 'DeepSeek-R1-Distill-Qwen-1.5B-q4f16_1-MLC';
+
+let currentProblem = '';
+let currentSolution = '';
+let currentRecognizedText = '';
+let currentSolutionDetails = null;
+let currentEvaluationResults = null;
 
 // ==================== ИНИЦИАЛИЗАЦИЯ ====================
 document.addEventListener('DOMContentLoaded', async () => {
-    console.log('Приложение запущено');
+    console.log('Gemini Study Copilot готов к работе');
 
-    // Регистрация Service Worker
     if ('serviceWorker' in navigator) {
         try {
             const registration = await navigator.serviceWorker.register('/sw.js');
             console.log('Service Worker зарегистрирован:', registration.scope);
-            updateOfflineStatus();
         } catch (error) {
             console.error('Ошибка регистрации Service Worker:', error);
         }
     }
 
-    // Инициализация базы данных
     await initDB();
-
-    // Инициализация темы
     initTheme();
-
-    // Обработка установки PWA
-    initPWAInstall();
-
-    // Инициализация событий
     initEventListeners();
+    updateOfflineStatus();
+    hydrateApiKeyInput();
 
-    // Загрузка модели
-    await initLLM();
+    if (!hasGeminiApiKey()) {
+        showStatus('Добавьте свой Gemini API ключ, чтобы решать задачи.', 'warning');
+    }
 });
 
 // ==================== БАЗА ДАННЫХ ====================
@@ -59,11 +62,11 @@ async function initDB() {
         };
 
         request.onupgradeneeded = (event) => {
-            const db = event.target.result;
-            if (!db.objectStoreNames.contains(STORE_NAME)) {
-                const objectStore = db.createObjectStore(STORE_NAME, {
+            const database = event.target.result;
+            if (!database.objectStoreNames.contains(STORE_NAME)) {
+                const objectStore = database.createObjectStore(STORE_NAME, {
                     keyPath: 'id',
-                    autoIncrement: true
+                    autoIncrement: true,
                 });
                 objectStore.createIndex('timestamp', 'timestamp', { unique: false });
                 console.log('Object store создан');
@@ -93,7 +96,7 @@ async function saveSolution(problem, solution, recognizedText = null) {
             recognizedText,
             evaluations,
             bestScore,
-            timestamp: new Date().toISOString()
+            timestamp: new Date().toISOString(),
         };
 
         const request = store.add(data);
@@ -116,7 +119,7 @@ async function getAllSolutions() {
         const transaction = db.transaction([STORE_NAME], 'readonly');
         const store = transaction.objectStore(STORE_NAME);
         const index = store.index('timestamp');
-        const request = index.openCursor(null, 'prev'); // Сортировка по убыванию
+        const request = index.openCursor(null, 'prev');
 
         const solutions = [];
 
@@ -172,6 +175,7 @@ function toggleTheme() {
 
 function updateThemeIcon(theme) {
     const icon = document.querySelector('.theme-icon');
+    if (!icon) return;
     if (theme === 'dark') {
         icon.innerHTML = '<path d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"></path>';
     } else {
@@ -179,145 +183,90 @@ function updateThemeIcon(theme) {
     }
 }
 
-// ==================== PWA УСТАНОВКА ====================
-function initPWAInstall() {
-    window.addEventListener('beforeinstallprompt', (e) => {
-        e.preventDefault();
-        deferredPrompt = e;
-
-        // Показываем кастомный промпт установки
-        const installPrompt = document.getElementById('install-prompt');
-        installPrompt.classList.remove('hidden');
-    });
-
-    document.getElementById('install-btn').addEventListener('click', async () => {
-        if (deferredPrompt) {
-            deferredPrompt.prompt();
-            const { outcome } = await deferredPrompt.userChoice;
-            console.log('Результат установки:', outcome);
-            deferredPrompt = null;
-        }
-        document.getElementById('install-prompt').classList.add('hidden');
-    });
-
-    document.getElementById('install-cancel').addEventListener('click', () => {
-        document.getElementById('install-prompt').classList.add('hidden');
-    });
-}
-
-// ==================== ИНИЦИАЛИЗАЦИЯ LLM ====================
-async function initLLM() {
-    const loadingSection = document.getElementById('model-loading');
-    const inputSection = document.getElementById('input-section');
-    const progressFill = document.getElementById('progress-fill');
-    const progressText = document.getElementById('progress-text');
-    const loadingStatus = document.getElementById('loading-status');
-
-    try {
-        loadingStatus.textContent = 'Проверка поддержки WebGPU...';
-
-        // Проверка поддержки WebGPU
-        if (!('gpu' in navigator)) {
-            throw new Error('WebGPU не поддерживается. Требуется современный браузер.');
-        }
-
-        if (!window.webllm) {
-            throw new Error('Библиотека WebLLM недоступна. Проверьте подключение к интернету.');
-        }
-
-        loadingStatus.textContent = 'Инициализация WebLLM...';
-
-        const handleProgress = (progress) => {
-            const percent = Math.round(progress.progress * 100);
-            progressFill.style.width = `${percent}%`;
-            progressText.textContent = `${percent}%`;
-            loadingStatus.textContent = progress.text || 'Загрузка модели...';
-        };
-
-        // Загрузка модели DeepSeek-R1-Distill-Qwen-1.5B
-        if (typeof window.webllm.CreateMLCEngine === 'function') {
-            llmEngine = await window.webllm.CreateMLCEngine({
-                modelId: MODEL_ID,
-                initProgressCallback: handleProgress,
-            });
-            llmSupportsModelParameter = true;
-        } else if (typeof window.webllm.MLCEngine === 'function') {
-            llmEngine = new window.webllm.MLCEngine();
-            llmEngine.setInitProgressCallback(handleProgress);
-            await llmEngine.reload(MODEL_ID, {
-                temperature: 0.7,
-                top_p: 0.9,
-            });
-            llmSupportsModelParameter = false;
-        } else {
-            throw new Error('Не удалось инициализировать WebLLM. Обновите приложение.');
-        }
-
-        console.log('Модель LLM загружена');
-        showStatus('Модель ИИ готова к работе!', 'success');
-
-        // Переключение на основной интерфейс
-        loadingSection.classList.add('hidden');
-        inputSection.classList.remove('hidden');
-
-    } catch (error) {
-        console.error('Ошибка загрузки модели:', error);
-        loadingStatus.textContent = `Ошибка: ${error.message}`;
-        showStatus(`Ошибка загрузки модели: ${error.message}`, 'error');
-
-        // Fallback: показываем интерфейс даже если модель не загрузилась
-        setTimeout(() => {
-            loadingSection.classList.add('hidden');
-            inputSection.classList.remove('hidden');
-        }, 3000);
-    }
-}
-
 // ==================== ОБРАБОТЧИКИ СОБЫТИЙ ====================
 function initEventListeners() {
-    // Переключение темы
-    document.getElementById('theme-toggle').addEventListener('click', toggleTheme);
-
-    // История
-    document.getElementById('history-btn').addEventListener('click', showHistory);
-    document.getElementById('close-history-btn').addEventListener('click', closeHistory);
-    document.getElementById('clear-history-btn').addEventListener('click', async () => {
+    document.getElementById('theme-toggle')?.addEventListener('click', toggleTheme);
+    document.getElementById('history-btn')?.addEventListener('click', showHistory);
+    document.getElementById('close-history-btn')?.addEventListener('click', closeHistory);
+    document.getElementById('clear-history-btn')?.addEventListener('click', async () => {
         if (confirm('Удалить всю историю?')) {
             await clearAllSolutions();
             await showHistory();
         }
     });
 
-    // Камера и загрузка
-    document.getElementById('camera-btn').addEventListener('click', () => {
+    document.getElementById('camera-btn')?.addEventListener('click', () => {
         document.getElementById('file-input').click();
     });
 
-    document.getElementById('upload-btn').addEventListener('click', () => {
+    document.getElementById('upload-btn')?.addEventListener('click', () => {
         document.getElementById('upload-input').click();
     });
 
-    document.getElementById('file-input').addEventListener('change', handleImageUpload);
-    document.getElementById('upload-input').addEventListener('change', handleImageUpload);
+    document.getElementById('paste-btn')?.addEventListener('click', handleClipboardPaste);
 
-    // Удаление изображения
-    document.getElementById('remove-image').addEventListener('click', removeImage);
+    document.getElementById('file-input')?.addEventListener('change', handleImageUpload);
+    document.getElementById('upload-input')?.addEventListener('change', handleImageUpload);
 
-    // Ввод текста
-    document.getElementById('text-input').addEventListener('input', updateSolveButton);
+    document.getElementById('remove-image')?.addEventListener('click', removeImage);
 
-    // Решение задачи
-    document.getElementById('solve-btn').addEventListener('click', solveProblem);
+    document.getElementById('text-input')?.addEventListener('input', updateSolveButton);
 
-    // Новая задача
-    document.getElementById('new-task-btn').addEventListener('click', resetToInput);
+    document.getElementById('solve-btn')?.addEventListener('click', solveProblem);
+    document.getElementById('new-task-btn')?.addEventListener('click', resetToInput);
+    document.getElementById('save-solution-btn')?.addEventListener('click', saveCurrentSolution);
 
-    // Сохранение решения
-    document.getElementById('save-solution-btn').addEventListener('click', saveCurrentSolution);
-
-    // Обновление статуса офлайн
     window.addEventListener('online', updateOfflineStatus);
     window.addEventListener('offline', updateOfflineStatus);
+
+    document.getElementById('api-key-btn')?.addEventListener('click', openApiKeyModal);
+    document.getElementById('hero-api-btn')?.addEventListener('click', openApiKeyModal);
+    document.getElementById('api-key-close')?.addEventListener('click', closeApiKeyModal);
+    document.getElementById('api-key-backdrop')?.addEventListener('click', closeApiKeyModal);
+    document.getElementById('api-key-save')?.addEventListener('click', saveApiKeyFromModal);
+    document.getElementById('api-key-clear')?.addEventListener('click', () => {
+        clearGeminiApiKey();
+        hydrateApiKeyInput();
+        showStatus('Gemini API ключ удалён.', 'warning');
+    });
+
+    document.getElementById('hero-start-btn')?.addEventListener('click', () => {
+        const workspace = document.getElementById('workspace');
+        workspace?.scrollIntoView({ behavior: 'smooth' });
+    });
+}
+
+// ==================== API KEY МОДАЛКА ====================
+function openApiKeyModal() {
+    hydrateApiKeyInput();
+    document.getElementById('api-key-dialog')?.classList.remove('hidden');
+    setTimeout(() => {
+        document.getElementById('api-key-input')?.focus();
+    }, 50);
+}
+
+function closeApiKeyModal() {
+    document.getElementById('api-key-dialog')?.classList.add('hidden');
+}
+
+function hydrateApiKeyInput() {
+    const input = document.getElementById('api-key-input');
+    if (input) {
+        input.value = getGeminiApiKey();
+    }
+}
+
+function saveApiKeyFromModal() {
+    const input = document.getElementById('api-key-input');
+    if (!input) return;
+    const key = input.value.trim();
+    if (!key) {
+        showStatus('Введите корректный API ключ.', 'error');
+        return;
+    }
+    setGeminiApiKey(key);
+    showStatus('Gemini API ключ сохранён.', 'success');
+    closeApiKeyModal();
 }
 
 // ==================== РАБОТА С ИЗОБРАЖЕНИЯМИ ====================
@@ -339,6 +288,55 @@ function handleImageUpload(event) {
     reader.readAsDataURL(file);
 }
 
+async function handleClipboardPaste() {
+    if (!navigator.clipboard) {
+        showStatus('Браузер не поддерживает доступ к буферу обмена', 'error');
+        return;
+    }
+
+    try {
+        if (navigator.clipboard.read) {
+            const items = await navigator.clipboard.read();
+            for (const item of items) {
+                for (const type of item.types) {
+                    if (type.startsWith('image/')) {
+                        const blob = await item.getType(type);
+                        const dataUrl = await blobToDataURL(blob);
+                        currentImage = dataUrl;
+                        showImagePreview(currentImage);
+                        updateSolveButton();
+                        showStatus('Изображение вставлено из буфера обмена', 'success');
+                        return;
+                    }
+                }
+            }
+        }
+
+        const text = await navigator.clipboard.readText();
+        if (text) {
+            const textInput = document.getElementById('text-input');
+            textInput.value = text;
+            updateSolveButton();
+            showStatus('Текст задачи вставлен из буфера обмена', 'success');
+            return;
+        }
+
+        showStatus('Буфер обмена пуст или не содержит поддерживаемых данных', 'warning');
+    } catch (error) {
+        console.error('Ошибка вставки из буфера обмена:', error);
+        showStatus('Не удалось получить данные из буфера обмена', 'error');
+    }
+}
+
+function blobToDataURL(blob) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+    });
+}
+
 function showImagePreview(imageSrc) {
     const preview = document.getElementById('preview-container');
     const image = document.getElementById('preview-image');
@@ -349,17 +347,22 @@ function showImagePreview(imageSrc) {
 
 function removeImage() {
     currentImage = null;
-    document.getElementById('preview-container').classList.add('hidden');
-    document.getElementById('file-input').value = '';
-    document.getElementById('upload-input').value = '';
+    const preview = document.getElementById('preview-container');
+    if (preview) {
+        preview.classList.add('hidden');
+    }
+    const fileInput = document.getElementById('file-input');
+    const uploadInput = document.getElementById('upload-input');
+    if (fileInput) fileInput.value = '';
+    if (uploadInput) uploadInput.value = '';
     updateSolveButton();
 }
 
 function updateSolveButton() {
-    const textInput = document.getElementById('text-input').value.trim();
+    const textValue = document.getElementById('text-input')?.value.trim() ?? '';
     const solveBtn = document.getElementById('solve-btn');
-
-    solveBtn.disabled = !currentImage && !textInput;
+    if (!solveBtn) return;
+    solveBtn.disabled = !currentImage && !textValue;
 }
 
 // ==================== OCR ====================
@@ -368,13 +371,14 @@ async function performOCR(imageData) {
         if (!tesseractWorker) {
             tesseractWorker = await Tesseract.createWorker('rus+eng', 1, {
                 logger: (m) => {
-                    console.log('Tesseract:', m);
                     if (m.status === 'recognizing text') {
                         const percent = Math.round(m.progress * 100);
-                        document.getElementById('processing-text').textContent =
-                            `Распознавание текста: ${percent}%`;
+                        const processingText = document.getElementById('processing-text');
+                        if (processingText) {
+                            processingText.textContent = `Распознавание текста: ${percent}%`;
+                        }
                     }
-                }
+                },
             });
         }
 
@@ -387,24 +391,23 @@ async function performOCR(imageData) {
 }
 
 // ==================== РЕШЕНИЕ ЗАДАЧИ ====================
-let currentProblem = '';
-let currentSolution = '';
-let currentRecognizedText = '';
-let currentSolutionDetails = null;
-let currentEvaluationResults = null;
-
 async function solveProblem() {
+    if (!hasGeminiApiKey()) {
+        showStatus('Сначала добавьте Gemini API ключ.', 'error');
+        openApiKeyModal();
+        return;
+    }
+
     const inputSection = document.getElementById('input-section');
     const processingSection = document.getElementById('processing-section');
     const solutionSection = document.getElementById('solution-section');
 
-    inputSection.classList.add('hidden');
-    processingSection.classList.remove('hidden');
+    inputSection?.classList.add('hidden');
+    processingSection?.classList.remove('hidden');
 
     try {
         let problemText = '';
 
-        // Если есть изображение - делаем OCR
         if (currentImage) {
             document.getElementById('processing-title').textContent = 'Обработка изображения...';
             document.getElementById('processing-text').textContent = 'Распознавание текста с фото';
@@ -415,107 +418,59 @@ async function solveProblem() {
             if (!problemText) {
                 throw new Error('Не удалось распознать текст. Попробуйте ввести задачу вручную.');
             }
-
-            console.log('Распознанный текст:', problemText);
         } else {
-            // Используем текст из поля ввода
             problemText = document.getElementById('text-input').value.trim();
             currentRecognizedText = null;
         }
 
         currentProblem = problemText;
 
-        // Генерация нескольких решений с помощью LLM
         document.getElementById('processing-title').textContent = 'Решение задачи...';
-        document.getElementById('processing-text').textContent = 'ИИ анализирует задачу';
+        document.getElementById('processing-text').textContent = 'Gemini анализирует варианты';
 
         const candidates = await runSelfConsistency(problemText);
 
-        // Проверка и оценка решений
-        document.getElementById('processing-text').textContent = 'Проверка полученных ответов';
+        document.getElementById('processing-text').textContent = 'Перепроверяем ответы';
         const scoredCandidates = await scoreSolutions(candidates);
 
         if (!scoredCandidates.length) {
-            throw new Error('Не удалось получить решение от ИИ. Попробуйте ещё раз.');
+            throw new Error('Не удалось получить решение от Gemini. Попробуйте ещё раз.');
         }
 
-        const sortedCandidates = scoredCandidates.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
-        const bestCandidate = sortedCandidates[0];
+        const sorted = scoredCandidates.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+        const bestCandidate = sorted[0];
 
         currentSolution = bestCandidate.solution;
         currentEvaluationResults = {
             bestScore: bestCandidate.score ?? 0,
-            results: sortedCandidates.map(candidate => ({
+            results: sorted.map((candidate) => ({
                 ...candidate,
-                isBest: candidate === bestCandidate
-            }))
+                isBest: candidate === bestCandidate,
+            })),
         };
+
         currentSolutionDetails = {
             solution: bestCandidate.solution,
             evaluations: currentEvaluationResults.results,
-            bestScore: currentEvaluationResults.bestScore
+            bestScore: currentEvaluationResults.bestScore,
         };
 
-        // Отображение решения
-        processingSection.classList.add('hidden');
+        processingSection?.classList.add('hidden');
         showSolution(problemText, bestCandidate.solution, currentRecognizedText, currentEvaluationResults);
-        solutionSection.classList.remove('hidden');
-
+        solutionSection?.classList.remove('hidden');
     } catch (error) {
         console.error('Ошибка решения:', error);
         showStatus(`Ошибка: ${error.message}`, 'error');
-        processingSection.classList.add('hidden');
-        inputSection.classList.remove('hidden');
+        processingSection?.classList.add('hidden');
+        inputSection?.classList.remove('hidden');
     }
-}
-
-async function generateGeminiSolution(problemText, { temperature = 0.7, seed = Date.now() } = {}) {
-    if (!llmEngine) {
-        throw new Error('Модель ИИ не загружена. Попробуйте перезагрузить страницу.');
-    }
-
-    const prompt = `Ты эксперт по математике и химии для 11 класса. Реши следующую задачу пошагово на русском языке.
-
-Задача: ${problemText}
-
-Формат ответа:
-1. Краткий ответ
-2. Подробное решение (с пояснениями каждого шага)
-3. Проверка (если применимо)
-
-Решение:`;
-
-    try {
-        const request = {
-            messages: [{ role: 'user', content: prompt }],
-            temperature,
-            max_tokens: 2000,
-            seed
-        };
-
-        if (llmSupportsModelParameter) {
-            request.model = MODEL_ID;
-        }
-
-        const response = await llmEngine.chat.completions.create(request);
-
-        const solution = response.choices[0].message.content;
-        return solution;
-    } catch (error) {
-        console.error('Ошибка генерации:', error);
-        throw new Error('Не удалось получить решение от ИИ. Проверьте подключение.');
-    }
-}
-
-async function generateSolution(problemText, options = {}) {
-    return generateGeminiSolution(problemText, options);
 }
 
 async function runSelfConsistency(problemText) {
     const attempts = [
-        { temperature: 0.5, seed: Date.now() },
-        { temperature: 0.8, seed: Date.now() + 1 },
-        { temperature: 1.1, seed: Date.now() + 2 }
+        { temperature: 0.4, seed: Date.now() },
+        { temperature: 0.75, seed: Date.now() + 1 },
+        { temperature: 1.05, seed: Date.now() + 2 },
     ];
 
     const candidates = [];
@@ -523,12 +478,15 @@ async function runSelfConsistency(problemText) {
     for (let index = 0; index < attempts.length; index++) {
         const attempt = attempts[index];
         try {
-            const solution = await generateGeminiSolution(problemText, attempt);
+            const solution = await generateGeminiSolution(problemText, {
+                temperature: attempt.temperature,
+                seed: attempt.seed,
+            });
             candidates.push({
                 id: `attempt-${index + 1}`,
                 solution,
                 temperature: attempt.temperature,
-                seed: attempt.seed
+                seed: attempt.seed,
             });
         } catch (error) {
             console.error('Ошибка при генерации варианта решения:', error);
@@ -536,7 +494,7 @@ async function runSelfConsistency(problemText) {
                 id: `attempt-${index + 1}`,
                 solution: 'Не удалось получить ответ для этой попытки.',
                 temperature: attempt.temperature,
-                seed: attempt.seed
+                seed: attempt.seed,
             });
         }
     }
@@ -545,37 +503,14 @@ async function runSelfConsistency(problemText) {
 }
 
 async function scoreSolutions(candidates) {
-    if (!llmEngine) {
-        throw new Error('Модель ИИ не загружена. Попробуйте перезагрузить страницу.');
-    }
-
     const scored = [];
 
     for (const candidate of candidates) {
-        const prompt = `Ты строгий проверяющий. Тебе дана задача и решение кандидата. Проверь корректность решения и оцени его по шкале от 0 до 100. В выводе укажи итоговый балл в формате "Оценка: <число>/100" и кратко прокомментируй ошибки или верные шаги.
-
-Задача:
-${currentProblem}
-
-Решение кандидата:
-${candidate.solution}
-
-Ответ:`;
-
-        const request = {
-            messages: [{ role: 'user', content: prompt }],
-            temperature: 0.2,
-            max_tokens: 700,
-        };
-
-        if (llmSupportsModelParameter) {
-            request.model = MODEL_ID;
-        }
-
         try {
-            const response = await llmEngine.chat.completions.create(request);
-            const review = response.choices[0].message.content.trim();
-            const scoreMatch = review.match(/(100|[1-9]?\d)\s*(?:\/\s*100|из\s*100|балл(?:ов)?)/i);
+            const review = await reviewGeminiSolution(currentProblem, candidate.solution, {
+                seed: candidate.seed,
+            });
+            const scoreMatch = review.match(/(100|[1-9]?\d)\s*(?:\/\s*100|из\s*100|\bбалл(?:ов)?)/i);
             let score = scoreMatch ? parseInt(scoreMatch[1], 10) : 0;
             if (Number.isNaN(score)) {
                 score = 0;
@@ -585,14 +520,14 @@ ${candidate.solution}
             scored.push({
                 ...candidate,
                 score,
-                review
+                review,
             });
         } catch (error) {
             console.error('Ошибка проверки решения:', error);
             scored.push({
                 ...candidate,
                 score: 0,
-                review: 'Не удалось получить оценку. Попробуйте ещё раз.'
+                review: 'Не удалось получить оценку. Попробуйте ещё раз.',
             });
         }
     }
@@ -601,7 +536,6 @@ ${candidate.solution}
 }
 
 function showSolution(problem, solution, recognizedText, evaluationData = null) {
-    // Показываем распознанный текст если есть
     if (recognizedText) {
         const recognizedSection = document.getElementById('recognized-text');
         const recognizedContent = document.getElementById('recognized-content');
@@ -611,7 +545,6 @@ function showSolution(problem, solution, recognizedText, evaluationData = null) 
         document.getElementById('recognized-text').classList.add('hidden');
     }
 
-    // Форматирование решения
     const solutionContent = document.getElementById('solution-content');
     solutionContent.innerHTML = formatSolution(solution);
 
@@ -619,14 +552,14 @@ function showSolution(problem, solution, recognizedText, evaluationData = null) 
 }
 
 function formatSolution(text) {
-    // Простое форматирование текста
     const safeText = (text ?? '').toString();
     if (!safeText.trim()) {
         return '<p>Ответ отсутствует</p>';
     }
 
-    let formatted = safeText
-        .replace(/\n\n/g, '</p><p>')
+    const formatted = safeText
+        .replace(/\r/g, '')
+        .replace(/\n\n+/g, '</p><p>')
         .replace(/\n/g, '<br>')
         .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
         .replace(/\*(.*?)\*/g, '<em>$1</em>');
@@ -659,7 +592,7 @@ function renderEvaluationResults(evaluationData) {
     scoreElement.textContent = `${bestScore}/100`;
 
     if (noteElement) {
-        const allBelowHundred = evaluationData.results.every(result => (result.score ?? 0) < 100);
+        const allBelowHundred = evaluationData.results.every((result) => (result.score ?? 0) < 100);
         if (allBelowHundred) {
             noteElement.textContent = 'Внимание: ни одна из попыток не получила 100/100. Проверьте решение вручную.';
             noteElement.classList.remove('hidden');
@@ -669,44 +602,50 @@ function renderEvaluationResults(evaluationData) {
         }
     }
 
-    alternativesList.innerHTML = evaluationData.results.map((result, index) => {
-        const parts = [`Попытка ${index + 1}`];
-        if (typeof result.temperature !== 'undefined') {
-            parts.push(`температура ${result.temperature}`);
-        }
-        if (typeof result.score === 'number') {
-            parts.push(`${result.score}/100`);
-        }
-        if (result.isBest) {
-            parts.push('выбранное решение');
-        }
+    alternativesList.innerHTML = evaluationData.results
+        .map((result, index) => {
+            const parts = [`Попытка ${index + 1}`];
+            if (typeof result.temperature !== 'undefined') {
+                parts.push(`температура ${result.temperature}`);
+            }
+            if (typeof result.score === 'number') {
+                parts.push(`${result.score}/100`);
+            }
+            if (result.isBest) {
+                parts.push('выбранное решение');
+            }
 
-        const summary = parts.join(' • ');
+            const summary = parts.join(' • ');
 
-        return `
-            <li class="alternative-item ${result.isBest ? 'selected' : ''}">
-                <details ${result.isBest ? 'open' : ''}>
-                    <summary>${escapeHtml(summary)}</summary>
-                    <div class="alternative-body">
-                        <div class="alternative-solution-text">${formatSolution(result.solution)}</div>
-                        <div class="alternative-review">
-                            <h4>Отзыв проверки</h4>
-                            <p>${escapeHtml(result.review || 'Без отзыва')}</p>
+            return `
+                <li class="alternative-item ${result.isBest ? 'selected' : ''}">
+                    <details ${result.isBest ? 'open' : ''}>
+                        <summary>${escapeHtml(summary)}</summary>
+                        <div class="alternative-body">
+                            <div class="alternative-solution-text">${formatSolution(result.solution)}</div>
+                            <div class="alternative-review">
+                                <h4>Отзыв проверки</h4>
+                                <p>${escapeHtml(result.review || 'Без отзыва')}</p>
+                            </div>
                         </div>
-                    </div>
-                </details>
-            </li>
-        `;
-    }).join('');
+                    </details>
+                </li>
+            `;
+        })
+        .join('');
 }
 
 function resetToInput() {
-    document.getElementById('solution-section').classList.add('hidden');
-    document.getElementById('input-section').classList.remove('hidden');
+    document.getElementById('solution-section')?.classList.add('hidden');
+    document.getElementById('processing-section')?.classList.add('hidden');
+    document.getElementById('input-section')?.classList.remove('hidden');
 
-    // Очистка
     removeImage();
-    document.getElementById('text-input').value = '';
+    const textInput = document.getElementById('text-input');
+    if (textInput) {
+        textInput.value = '';
+    }
+
     currentProblem = '';
     currentSolution = '';
     currentRecognizedText = '';
@@ -721,13 +660,13 @@ async function saveCurrentSolution() {
     }
 
     try {
-        const solutionPayload = currentSolutionDetails ?? {
+        const payload = currentSolutionDetails ?? {
             solution: currentSolution,
             evaluations: currentEvaluationResults ? currentEvaluationResults.results : [],
-            bestScore: currentEvaluationResults ? currentEvaluationResults.bestScore : null
+            bestScore: currentEvaluationResults ? currentEvaluationResults.bestScore : null,
         };
 
-        await saveSolution(currentProblem, solutionPayload, currentRecognizedText);
+        await saveSolution(currentProblem, payload, currentRecognizedText);
     } catch (error) {
         console.error('Ошибка сохранения:', error);
         showStatus('Ошибка сохранения в историю', 'error');
@@ -741,9 +680,9 @@ async function showHistory() {
     const historySection = document.getElementById('history-section');
     const historyList = document.getElementById('history-list');
 
-    inputSection.classList.add('hidden');
-    solutionSection.classList.add('hidden');
-    historySection.classList.remove('hidden');
+    inputSection?.classList.add('hidden');
+    solutionSection?.classList.add('hidden');
+    historySection?.classList.remove('hidden');
 
     try {
         const solutions = await getAllSolutions();
@@ -753,33 +692,31 @@ async function showHistory() {
             return;
         }
 
-        historyList.innerHTML = solutions.map(solution => {
-            const date = new Date(solution.timestamp).toLocaleString('ru-RU');
-            const problemPreview = solution.problem.slice(0, 100) +
-                (solution.problem.length > 100 ? '...' : '');
-            const solutionPreview = solution.solution.slice(0, 150) +
-                (solution.solution.length > 150 ? '...' : '');
+        historyList.innerHTML = solutions
+            .map((solution) => {
+                const date = new Date(solution.timestamp).toLocaleString('ru-RU');
+                const problemPreview = solution.problem.slice(0, 120) + (solution.problem.length > 120 ? '...' : '');
+                const solutionPreview = solution.solution.slice(0, 160) + (solution.solution.length > 160 ? '...' : '');
 
-            return `
-                <div class="history-item" data-id="${solution.id}">
-                    <div class="history-date">${date}</div>
-                    <div class="history-problem">${escapeHtml(problemPreview)}</div>
-                    <div class="history-solution">${escapeHtml(solutionPreview)}</div>
-                </div>
-            `;
-        }).join('');
+                return `
+                    <div class="history-item" data-id="${solution.id}">
+                        <div class="history-date">${escapeHtml(date)}</div>
+                        <div class="history-problem">${escapeHtml(problemPreview)}</div>
+                        <div class="history-solution">${escapeHtml(solutionPreview)}</div>
+                    </div>
+                `;
+            })
+            .join('');
 
-        // Обработчики клика на элементы истории
-        document.querySelectorAll('.history-item').forEach(item => {
+        document.querySelectorAll('.history-item').forEach((item) => {
             item.addEventListener('click', () => {
-                const id = parseInt(item.dataset.id);
-                const solution = solutions.find(s => s.id === id);
+                const id = parseInt(item.dataset.id, 10);
+                const solution = solutions.find((s) => s.id === id);
                 if (solution) {
                     showHistorySolution(solution);
                 }
             });
         });
-
     } catch (error) {
         console.error('Ошибка загрузки истории:', error);
         showStatus('Ошибка загрузки истории', 'error');
@@ -790,6 +727,7 @@ function showHistorySolution(solution) {
     currentProblem = solution.problem;
     currentSolution = solution.solution;
     currentRecognizedText = solution.recognizedText;
+
     if (Array.isArray(solution.evaluations) && solution.evaluations.length > 0) {
         const computedBestScore = typeof solution.bestScore === 'number'
             ? solution.bestScore
@@ -797,56 +735,60 @@ function showHistorySolution(solution) {
 
         const normalizedResults = solution.evaluations.map((item, index, array) => ({
             ...item,
-            isBest: (item.score ?? 0) === computedBestScore &&
-                array.findIndex(candidate => (candidate.score ?? 0) === computedBestScore) === index
+            isBest:
+                (item.score ?? 0) === computedBestScore &&
+                array.findIndex((candidate) => (candidate.score ?? 0) === computedBestScore) === index,
         }));
 
         currentEvaluationResults = {
             bestScore: computedBestScore,
-            results: normalizedResults
+            results: normalizedResults,
         };
 
         currentSolutionDetails = {
             solution: solution.solution,
             evaluations: normalizedResults,
-            bestScore: computedBestScore
+            bestScore: computedBestScore,
         };
     } else {
         currentEvaluationResults = null;
         currentSolutionDetails = null;
     }
 
-    document.getElementById('history-section').classList.add('hidden');
+    document.getElementById('history-section')?.classList.add('hidden');
     showSolution(solution.problem, solution.solution, solution.recognizedText, currentEvaluationResults);
-    document.getElementById('solution-section').classList.remove('hidden');
+    document.getElementById('solution-section')?.classList.remove('hidden');
 }
 
 function closeHistory() {
-    document.getElementById('history-section').classList.add('hidden');
-    document.getElementById('input-section').classList.remove('hidden');
+    document.getElementById('history-section')?.classList.add('hidden');
+    document.getElementById('input-section')?.classList.remove('hidden');
 }
 
 // ==================== УТИЛИТЫ ====================
 function showStatus(message, type = 'info') {
     const statusBar = document.getElementById('status-bar');
+    if (!statusBar) return;
     const statusText = statusBar.querySelector('.status-text');
 
     statusBar.className = `status-bar ${type}`;
     statusText.textContent = message;
     statusBar.classList.remove('hidden');
 
-    setTimeout(() => {
+    clearTimeout(showStatus.timeoutId);
+    showStatus.timeoutId = setTimeout(() => {
         statusBar.classList.add('hidden');
-    }, 5000);
+    }, 6000);
 }
 
 function updateOfflineStatus() {
     const statusElement = document.getElementById('offline-status');
+    if (!statusElement) return;
     if (navigator.onLine) {
-        statusElement.textContent = 'Онлайн';
+        statusElement.textContent = 'Онлайн (Gemini доступен)';
         statusElement.classList.remove('offline');
     } else {
-        statusElement.textContent = 'Офлайн';
+        statusElement.textContent = 'Офлайн (запросы к Gemini недоступны)';
         statusElement.classList.add('offline');
     }
 }
@@ -857,5 +799,4 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
-// Инициализация статуса при загрузке
 updateOfflineStatus();
