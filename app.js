@@ -23,15 +23,6 @@ let currentConsensus = null;
 document.addEventListener('DOMContentLoaded', async () => {
     console.log('Heavy Study Ensemble загружен');
 
-    if ('serviceWorker' in navigator) {
-        try {
-            const registration = await navigator.serviceWorker.register('/sw.js');
-            console.log('Service Worker зарегистрирован:', registration.scope);
-        } catch (error) {
-            console.error('Ошибка регистрации Service Worker:', error);
-        }
-    }
-
     await initDB();
     initTheme();
     initEventListeners();
