@@ -31,6 +31,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     if (!hasOpenRouterApiKey()) {
         showStatus('Добавьте OpenRouter ключ, чтобы запустить ансамбль моделей.', 'warning');
+        openApiKeyModal();
     }
 });
 
@@ -234,6 +235,7 @@ function initEventListeners() {
 function openApiKeyModal() {
     hydrateApiKeyInput();
     document.getElementById('api-key-dialog')?.classList.remove('hidden');
+    document.getElementById('api-key-backdrop')?.classList.remove('hidden');
     setTimeout(() => {
         document.getElementById('api-key-input')?.focus();
     }, 50);
@@ -241,6 +243,7 @@ function openApiKeyModal() {
 
 function closeApiKeyModal() {
     document.getElementById('api-key-dialog')?.classList.add('hidden');
+    document.getElementById('api-key-backdrop')?.classList.add('hidden');
 }
 
 function hydrateApiKeyInput() {
