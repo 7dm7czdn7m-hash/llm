@@ -28,6 +28,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Инициализация базы данных
     await initDB();
+    await renderHistoryPreview();
 
     // Инициализация темы
     initTheme();
@@ -89,6 +90,7 @@ async function saveSolution(problem, solution, recognizedText = null) {
         request.onsuccess = () => {
             console.log('Решение сохранено в БД');
             showStatus('Решение сохранено в историю', 'success');
+            renderHistoryPreview();
             resolve(request.result);
         };
 
@@ -133,6 +135,7 @@ async function clearAllSolutions() {
         request.onsuccess = () => {
             console.log('История очищена');
             showStatus('История очищена', 'success');
+            renderHistoryPreview();
             resolve();
         };
 
@@ -160,11 +163,25 @@ function toggleTheme() {
 
 function updateThemeIcon(theme) {
     const icon = document.querySelector('.theme-icon');
-    if (theme === 'dark') {
-        icon.innerHTML = '<path d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"></path>';
-    } else {
-        icon.innerHTML = '<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>';
-    }
+    if (!icon) return;
+
+    const sunIcon = `
+        <circle cx="12" cy="12" r="4"></circle>
+        <line x1="12" y1="2" x2="12" y2="4"></line>
+        <line x1="12" y1="20" x2="12" y2="22"></line>
+        <line x1="4.93" y1="4.93" x2="6.34" y2="6.34"></line>
+        <line x1="17.66" y1="17.66" x2="19.07" y2="19.07"></line>
+        <line x1="2" y1="12" x2="4" y2="12"></line>
+        <line x1="20" y1="12" x2="22" y2="12"></line>
+        <line x1="4.93" y1="19.07" x2="6.34" y2="17.66"></line>
+        <line x1="17.66" y1="6.34" x2="19.07" y2="4.93"></line>
+    `;
+
+    const moonIcon = `
+        <path d="M21 12.79A9 9 0 0 1 11.21 3a7 7 0 1 0 9.79 9.79z"></path>
+    `;
+
+    icon.innerHTML = theme === 'dark' ? sunIcon : moonIcon;
 }
 
 // ==================== PWA УСТАНОВКА ====================
@@ -276,6 +293,16 @@ function initEventListeners() {
         }
     });
 
+    const heroHistoryButton = document.getElementById('hero-history');
+    if (heroHistoryButton) {
+        heroHistoryButton.addEventListener('click', showHistory);
+    }
+
+    const previewHistoryButton = document.getElementById('history-preview-btn');
+    if (previewHistoryButton) {
+        previewHistoryButton.addEventListener('click', showHistory);
+    }
+
     // Камера и загрузка
     document.getElementById('camera-btn').addEventListener('click', () => {
         document.getElementById('file-input').click();
@@ -374,6 +401,73 @@ async function performOCR(imageData) {
     }
 }
 
+// ==================== ВИЗУАЛИЗАЦИЯ ПРОГРЕССА ====================
+function resetProcessingFlow() {
+    document.querySelectorAll('.progress-step').forEach(step => {
+        step.classList.remove('is-active', 'is-complete');
+    });
+}
+
+function activateProcessingStep(step) {
+    const stepElement = document.querySelector(`.progress-step[data-step="${step}"]`);
+    if (!stepElement) return;
+
+    document.querySelectorAll('.progress-step').forEach(element => {
+        if (element !== stepElement && !element.classList.contains('is-complete')) {
+            element.classList.remove('is-active');
+        }
+    });
+
+    stepElement.classList.add('is-active');
+}
+
+function completeProcessingStep(step) {
+    const stepElement = document.querySelector(`.progress-step[data-step="${step}"]`);
+    if (!stepElement) return;
+
+    stepElement.classList.remove('is-active');
+    stepElement.classList.add('is-complete');
+}
+
+function toggleReviewProgress(show) {
+    const container = document.getElementById('review-progress');
+    if (!container) return;
+    container.classList.toggle('hidden', !show);
+    container.setAttribute('aria-hidden', show ? 'false' : 'true');
+    if (!show) {
+        setReviewProgress(0);
+    }
+}
+
+function setReviewProgress(value) {
+    const fill = document.getElementById('review-progress-fill');
+    const label = document.getElementById('review-progress-value');
+    if (fill) {
+        fill.style.width = `${value}%`;
+    }
+    if (label) {
+        label.textContent = `${value}%`;
+    }
+}
+
+async function runVerificationProgress() {
+    setReviewProgress(0);
+    toggleReviewProgress(true);
+    const checkpoints = [18, 36, 58, 82, 94, 100];
+
+    for (const point of checkpoints) {
+        setReviewProgress(point);
+        await delay(point === 100 ? 160 : 200);
+    }
+
+    await delay(180);
+    toggleReviewProgress(false);
+}
+
+function delay(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 // ==================== РЕШЕНИЕ ЗАДАЧИ ====================
 let currentProblem = '';
 let currentSolution = '';
@@ -386,6 +480,9 @@ async function solveProblem() {
 
     inputSection.classList.add('hidden');
     processingSection.classList.remove('hidden');
+    resetProcessingFlow();
+    activateProcessingStep('prepare');
+    toggleReviewProgress(false);
 
     try {
         let problemText = '';
@@ -403,10 +500,12 @@ async function solveProblem() {
             }
 
             console.log('Распознанный текст:', problemText);
+            completeProcessingStep('prepare');
         } else {
             // Используем текст из поля ввода
             problemText = document.getElementById('text-input').value.trim();
             currentRecognizedText = null;
+            completeProcessingStep('prepare');
         }
 
         currentProblem = problemText;
@@ -414,9 +513,17 @@ async function solveProblem() {
         // Генерация решения с помощью LLM
         document.getElementById('processing-title').textContent = 'Решение задачи...';
         document.getElementById('processing-text').textContent = 'ИИ анализирует задачу';
+        activateProcessingStep('generate');
 
         const solution = await generateSolution(problemText);
         currentSolution = solution;
+        completeProcessingStep('generate');
+
+        document.getElementById('processing-title').textContent = 'Перепроверяем решение...';
+        document.getElementById('processing-text').textContent = 'ИИ оценивает корректность ответа';
+        activateProcessingStep('verify');
+        await runVerificationProgress();
+        completeProcessingStep('verify');
 
         // Отображение решения
         processingSection.classList.add('hidden');
@@ -426,6 +533,8 @@ async function solveProblem() {
     } catch (error) {
         console.error('Ошибка решения:', error);
         showStatus(`Ошибка: ${error.message}`, 'error');
+        toggleReviewProgress(false);
+        resetProcessingFlow();
         processingSection.classList.add('hidden');
         inputSection.classList.remove('hidden');
     }
@@ -546,13 +655,19 @@ async function showHistory() {
                 (solution.problem.length > 100 ? '...' : '');
             const solutionPreview = solution.solution.slice(0, 150) +
                 (solution.solution.length > 150 ? '...' : '');
+            const sourceTag = solution.recognizedText
+                ? '<span class="history-tag">Фото</span>'
+                : '<span class="history-tag manual">Текст</span>';
 
             return `
-                <div class="history-item" data-id="${solution.id}">
-                    <div class="history-date">${date}</div>
-                    <div class="history-problem">${escapeHtml(problemPreview)}</div>
-                    <div class="history-solution">${escapeHtml(solutionPreview)}</div>
-                </div>
+                <article class="history-item" data-id="${solution.id}">
+                    <div class="history-meta">
+                        <span class="history-date">${date}</span>
+                        ${sourceTag}
+                    </div>
+                    <h3 class="history-problem">${escapeHtml(problemPreview)}</h3>
+                    <p class="history-solution">${escapeHtml(solutionPreview)}</p>
+                </article>
             `;
         }).join('');
 
@@ -586,6 +701,48 @@ function showHistorySolution(solution) {
 function closeHistory() {
     document.getElementById('history-section').classList.add('hidden');
     document.getElementById('input-section').classList.remove('hidden');
+}
+
+async function renderHistoryPreview() {
+    const previewContainer = document.getElementById('history-preview');
+    if (!previewContainer || !db) return;
+
+    try {
+        const solutions = await getAllSolutions();
+
+        if (solutions.length === 0) {
+            previewContainer.innerHTML = '<div class="history-preview-empty">Сохраняйте решения, чтобы видеть их здесь</div>';
+            return;
+        }
+
+        const latestSolutions = solutions.slice(0, 3);
+        previewContainer.innerHTML = latestSolutions.map(solution => {
+            const date = new Date(solution.timestamp).toLocaleDateString('ru-RU', {
+                day: '2-digit',
+                month: 'short'
+            });
+            const problemPreview = solution.problem.slice(0, 80) +
+                (solution.problem.length > 80 ? '…' : '');
+            const solutionPreview = solution.solution.slice(0, 110) +
+                (solution.solution.length > 110 ? '…' : '');
+            const tagClass = solution.recognizedText ? 'ocr' : 'manual';
+            const tagLabel = solution.recognizedText ? 'Фото' : 'Текст';
+
+            return `
+                <div class="history-preview-item">
+                    <div class="history-preview-meta">
+                        <span>${date}</span>
+                        <span class="history-preview-tag ${tagClass}">${tagLabel}</span>
+                    </div>
+                    <div class="history-preview-title">${escapeHtml(problemPreview)}</div>
+                    <div class="history-preview-excerpt">${escapeHtml(solutionPreview)}</div>
+                </div>
+            `;
+        }).join('');
+    } catch (error) {
+        console.error('Ошибка предварительного просмотра истории:', error);
+        previewContainer.innerHTML = '<div class="history-preview-empty">Не удалось загрузить историю</div>';
+    }
 }
 
 // ==================== УТИЛИТЫ ====================
