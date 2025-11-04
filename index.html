@@ -11,6 +11,9 @@
     <title>Решатель Задач</title>
 
     <link rel="manifest" href="manifest.json">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="styles.css">
     <link rel="apple-touch-icon" href="icons/icon-192.png">
 
@@ -19,8 +22,9 @@
 </head>
 <body>
     <!-- Установка PWA -->
-    <div id="install-prompt" class="install-prompt hidden">
+    <div id="install-prompt" class="install-prompt hidden" role="dialog" aria-modal="true">
         <div class="install-content">
+            <div class="install-badge">PWA</div>
             <h3>Установить приложение?</h3>
             <p>Работает полностью офлайн после установки</p>
             <div class="install-buttons">
@@ -32,149 +36,275 @@
 
     <!-- Header -->
     <header class="app-header">
-        <div class="header-content">
-            <h1>🧮 Решатель Задач</h1>
-            <div class="header-controls">
-                <button id="theme-toggle" class="icon-btn" aria-label="Переключить тему">
-                    <svg class="theme-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+        <div class="header-inner">
+            <a class="brand" href="#workspace" aria-label="Перейти к решению">
+                <div class="brand-icon">🧠</div>
+                <div class="brand-copy">
+                    <span class="brand-title">Решатель задач</span>
+                    <span class="brand-subtitle">ИИ офлайн для математики и химии</span>
+                </div>
+            </a>
+            <div class="header-actions">
+                <button id="history-btn" class="header-btn" aria-label="Открыть историю" data-tooltip="История решений">
+                    <svg class="header-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M12 6v6l3.5 3.5" />
+                        <path d="M5.1 19.2A9 9 0 1 0 4 12" />
+                        <path d="M3 5v5h5" />
                     </svg>
                 </button>
-                <button id="history-btn" class="icon-btn" aria-label="История">
-                    <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                <button id="theme-toggle" class="header-btn" aria-label="Переключить тему" data-tooltip="Переключить тему">
+                    <svg class="theme-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M21 12.79A9 9 0 0 1 11.21 3 7 7 0 1 0 21 12.79z"></path>
                     </svg>
                 </button>
             </div>
         </div>
     </header>
 
-    <!-- Main Content -->
-    <main class="container">
-        <!-- Status Bar -->
-        <div id="status-bar" class="status-bar hidden">
-            <div class="status-content">
-                <div class="status-icon">ℹ️</div>
-                <div class="status-text"></div>
-            </div>
-        </div>
-
-        <!-- Model Loading -->
-        <div id="model-loading" class="card">
-            <h2>Загрузка модели ИИ</h2>
-            <p class="loading-info">Первая загрузка займёт несколько минут (~600MB)</p>
-            <div class="progress-container">
-                <div class="progress-bar">
-                    <div id="progress-fill" class="progress-fill" style="width: 0%"></div>
+    <main class="page">
+        <section class="hero" id="hero">
+            <div class="hero-content">
+                <span class="hero-eyebrow">Учимся и решаем вместе</span>
+                <h1 class="hero-title">ИИ-сервис для мгновенного решения задач по математике и химии</h1>
+                <p class="hero-description">Сфотографируйте задачу, загрузите изображение или введите вручную — приложение распознает условие, предложит пошаговое решение и перепроверит его перед выдачей результата.</p>
+                <div class="hero-actions">
+                    <a class="btn-primary" href="#workspace">Начать решение</a>
+                    <button class="btn-ghost" id="hero-history" type="button">Просмотреть историю</button>
                 </div>
-                <div id="progress-text" class="progress-text">0%</div>
+                <div class="hero-highlights">
+                    <div class="highlight-card">
+                        <div class="highlight-icon">📶</div>
+                        <div>
+                            <p class="highlight-title">Полностью офлайн</p>
+                            <p class="highlight-text">Работает без интернета после первой загрузки модели</p>
+                        </div>
+                    </div>
+                    <div class="highlight-card">
+                        <div class="highlight-icon">⚡️</div>
+                        <div>
+                            <p class="highlight-title">Быстрый старт</p>
+                            <p class="highlight-text">Поддержка камеры, загрузки и ручного ввода</p>
+                        </div>
+                    </div>
+                    <div class="highlight-card">
+                        <div class="highlight-icon">🛡️</div>
+                        <div>
+                            <p class="highlight-title">Проверка решений</p>
+                            <p class="highlight-text">Встроенная перепроверка и сохранение истории</p>
+                        </div>
+                    </div>
+                </div>
             </div>
-            <div id="loading-status" class="loading-status">Инициализация...</div>
-        </div>
-
-        <!-- Input Section -->
-        <section id="input-section" class="card hidden">
-            <h2>Решить задачу</h2>
-
-            <!-- Camera/Upload Buttons -->
-            <div class="input-buttons">
-                <button id="camera-btn" class="btn-primary btn-large">
-                    <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path>
-                        <circle cx="12" cy="13" r="4"></circle>
-                    </svg>
-                    Сфотографировать задачу
-                </button>
-
-                <button id="upload-btn" class="btn-secondary btn-large">
-                    <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                        <polyline points="17 8 12 3 7 8"></polyline>
-                        <line x1="12" y1="3" x2="12" y2="15"></line>
-                    </svg>
-                    Загрузить из галереи
-                </button>
-            </div>
-
-            <!-- Hidden File Input -->
-            <input type="file" id="file-input" accept="image/*" capture="environment" style="display: none;">
-            <input type="file" id="upload-input" accept="image/*" style="display: none;">
-
-            <!-- Preview -->
-            <div id="preview-container" class="preview-container hidden">
-                <img id="preview-image" class="preview-image" alt="Загруженное изображение">
-                <button id="remove-image" class="btn-remove">✕</button>
-            </div>
-
-            <!-- Text Input -->
-            <div class="text-input-container">
-                <label for="text-input">Или введите задачу вручную:</label>
-                <textarea id="text-input"
-                          class="text-input"
-                          placeholder="Например: Решите уравнение 2x + 5 = 15"
-                          rows="4"></textarea>
-            </div>
-
-            <!-- Solve Button -->
-            <button id="solve-btn" class="btn-primary btn-large" disabled>
-                Решить задачу
-            </button>
+            <aside class="hero-aside">
+                <div class="hero-card gradient">
+                    <h3>Последние решения</h3>
+                    <div id="history-preview" class="history-preview"></div>
+                    <button class="btn-secondary compact" id="history-preview-btn" type="button">Вся история</button>
+                </div>
+                <div class="hero-card subtle">
+                    <h3>Совет</h3>
+                    <p>Используйте чёткие фотографии или вводите условие полностью — так мы сможем быстрее перепроверить результат.</p>
+                </div>
+            </aside>
         </section>
 
-        <!-- Processing Section -->
-        <section id="processing-section" class="card hidden">
-            <div class="processing-content">
-                <div class="spinner"></div>
-                <h3 id="processing-title">Обработка изображения...</h3>
-                <p id="processing-text">Распознавание текста с фото</p>
+        <section id="workspace" class="workspace">
+            <div id="status-bar" class="status-bar hidden" role="status" aria-live="polite">
+                <div class="status-content">
+                    <div class="status-icon">ℹ️</div>
+                    <div class="status-text"></div>
+                </div>
+            </div>
+
+            <div class="workspace-grid">
+                <!-- Model Loading -->
+                <article id="model-loading" class="panel panel-loading">
+                    <div class="panel-header">
+                        <h2 class="panel-title">Загрузка модели ИИ</h2>
+                        <span class="panel-pill">~600 MB</span>
+                    </div>
+                    <p class="panel-description">Первая загрузка займёт несколько минут. Процесс выполняется один раз и хранится локально.</p>
+                    <div class="progress-container">
+                        <div class="progress-bar">
+                            <div id="progress-fill" class="progress-fill" style="width: 0%"></div>
+                        </div>
+                        <div class="progress-meta">
+                            <span id="progress-text" class="progress-text">0%</span>
+                            <span id="loading-status" class="loading-status">Инициализация...</span>
+                        </div>
+                    </div>
+                </article>
+
+                <!-- Input Section -->
+                <section id="input-section" class="panel hidden">
+                    <div class="panel-header">
+                        <div>
+                            <p class="panel-eyebrow">Новый запрос</p>
+                            <h2 class="panel-title">Решить задачу</h2>
+                        </div>
+                        <span class="panel-pill accent">Готово к работе</span>
+                    </div>
+
+                    <div class="capture-grid">
+                        <article class="capture-card" data-tooltip="Откроется камера устройства">
+                            <div class="capture-icon">📷</div>
+                            <h3>Сфотографировать задачу</h3>
+                            <p>Попросите камеру сосредоточиться на условии и следите за освещением.</p>
+                            <button id="camera-btn" class="btn-primary" type="button">
+                                Открыть камеру
+                            </button>
+                        </article>
+                        <article class="capture-card" data-tooltip="Загрузите изображение из файлов">
+                            <div class="capture-icon">🖼️</div>
+                            <h3>Загрузить из галереи</h3>
+                            <p>Поддерживаются изображения с текстом задачи в хорошем качестве.</p>
+                            <button id="upload-btn" class="btn-secondary" type="button">
+                                Выбрать файл
+                            </button>
+                        </article>
+                    </div>
+
+                    <input type="file" id="file-input" accept="image/*" capture="environment" hidden>
+                    <input type="file" id="upload-input" accept="image/*" hidden>
+
+                    <div id="preview-container" class="preview-container hidden">
+                        <img id="preview-image" class="preview-image" alt="Загруженное изображение">
+                        <button id="remove-image" class="btn-remove" type="button" aria-label="Удалить изображение">✕</button>
+                    </div>
+
+                    <div class="text-input-container">
+                        <label for="text-input">Или введите задачу вручную</label>
+                        <textarea id="text-input" class="text-input" placeholder="Например: Решите уравнение 2x + 5 = 15" rows="4"></textarea>
+                        <div class="input-hint" data-tooltip="Можно использовать математические символы">💡 Используйте подробное условие и единицы измерения</div>
+                    </div>
+
+                    <div class="action-row">
+                        <button id="solve-btn" class="btn-primary btn-large" type="button" disabled>
+                            Решить задачу
+                        </button>
+                        <span class="action-hint">Решение и перепроверка выполняются локально</span>
+                    </div>
+                </section>
+
+                <!-- Processing Section -->
+                <section id="processing-section" class="panel processing hidden" aria-live="polite">
+                    <div class="panel-header">
+                        <h2 class="panel-title">Обработка запроса</h2>
+                        <span class="panel-pill">В прогрессе</span>
+                    </div>
+                    <div class="processing-content">
+                        <div class="spinner"></div>
+                        <h3 id="processing-title">Обработка изображения...</h3>
+                        <p id="processing-text">Распознавание текста с фото</p>
+                    </div>
+                    <div class="progress-tracker">
+                        <div class="progress-step" data-step="prepare">
+                            <div class="step-marker">1</div>
+                            <div class="step-body">
+                                <p class="step-title">Подготовка данных</p>
+                                <p class="step-text">OCR и анализ условия</p>
+                            </div>
+                        </div>
+                        <div class="progress-step" data-step="generate">
+                            <div class="step-marker">2</div>
+                            <div class="step-body">
+                                <p class="step-title">Генерация решения</p>
+                                <p class="step-text">ИИ строит подробный ответ</p>
+                            </div>
+                        </div>
+                        <div class="progress-step" data-step="verify">
+                            <div class="step-marker">3</div>
+                            <div class="step-body">
+                                <p class="step-title">Перепроверка</p>
+                                <p class="step-text">Проверяем расчёты и логику</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div id="review-progress" class="review-progress hidden" aria-hidden="true">
+                        <div class="review-progress-label">
+                            <span>Перепроверка решения</span>
+                            <span id="review-progress-value">0%</span>
+                        </div>
+                        <div class="review-progress-bar">
+                            <div id="review-progress-fill" class="review-progress-fill"></div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Solution Section -->
+                <section id="solution-section" class="panel solution hidden">
+                    <div class="solution-header">
+                        <div>
+                            <p class="panel-eyebrow">Готово</p>
+                            <h2 class="panel-title">Решение</h2>
+                        </div>
+                        <div class="solution-actions">
+                            <button id="new-task-btn" class="btn-secondary" type="button">Новая задача</button>
+                            <button id="save-solution-btn" class="btn-primary" type="button">Сохранить</button>
+                        </div>
+                    </div>
+
+                    <div id="recognized-text" class="recognized-text hidden">
+                        <h3>Распознанная задача</h3>
+                        <div id="recognized-content" class="recognized-content"></div>
+                    </div>
+
+                    <div id="solution-content" class="solution-content"></div>
+                </section>
+
+                <!-- History Section -->
+                <section id="history-section" class="panel history hidden">
+                    <div class="history-header">
+                        <div>
+                            <p class="panel-eyebrow">Архив решений</p>
+                            <h2 class="panel-title">История</h2>
+                        </div>
+                        <div class="history-actions">
+                            <button id="clear-history-btn" class="btn-danger" type="button">Очистить</button>
+                            <button id="close-history-btn" class="btn-secondary" type="button">Закрыть</button>
+                        </div>
+                    </div>
+                    <div id="history-list" class="history-list">
+                        <p class="empty-history">История пуста</p>
+                    </div>
+                </section>
             </div>
         </section>
 
-        <!-- Solution Section -->
-        <section id="solution-section" class="card hidden">
-            <div class="solution-header">
-                <h2>Решение</h2>
-                <button id="new-task-btn" class="btn-secondary">Новая задача</button>
+        <section class="about" id="about">
+            <div class="about-card">
+                <h2>О сервисе</h2>
+                <p>Решатель задач — это автономный помощник, объединяющий OCR и языковую модель DeepSeek-R1-Distill-Qwen-1.5B. Он распознаёт условия задач с изображений, выстраивает пошаговые решения и сохраняет историю локально.</p>
+                <div class="about-grid">
+                    <article class="about-item">
+                        <h3>Интеллектуальная обработка</h3>
+                        <p>Применяем Tesseract.js для точного распознавания текста и обеспечиваем корректность данных перед решением.</p>
+                    </article>
+                    <article class="about-item">
+                        <h3>Разбор и объяснения</h3>
+                        <p>ИИ формирует структурированный ответ: краткий результат, подробный вывод и дополнительные проверки.</p>
+                    </article>
+                    <article class="about-item">
+                        <h3>История и повторное использование</h3>
+                        <p>Все решения сохраняются в защищённую локальную базу, так что вы можете вернуться к ним без интернета.</p>
+                    </article>
+                </div>
             </div>
-
-            <div id="recognized-text" class="recognized-text hidden">
-                <h3>Распознанная задача:</h3>
-                <div id="recognized-content" class="recognized-content"></div>
-            </div>
-
-            <div id="solution-content" class="solution-content"></div>
-
-            <button id="save-solution-btn" class="btn-primary">
-                Сохранить в историю
-            </button>
-        </section>
-
-        <!-- History Section -->
-        <section id="history-section" class="card hidden">
-            <div class="history-header">
-                <h2>История решений</h2>
-                <button id="close-history-btn" class="btn-secondary">Закрыть</button>
-            </div>
-
-            <div id="history-list" class="history-list">
-                <p class="empty-history">История пуста</p>
-            </div>
-
-            <button id="clear-history-btn" class="btn-danger">
-                Очистить историю
-            </button>
         </section>
     </main>
 
-    <!-- Footer -->
     <footer class="app-footer">
-        <p>
-            <strong>Офлайн режим:</strong>
-            <span id="offline-status">Проверка...</span>
-        </p>
-        <p class="footer-note">
-            Работает на DeepSeek-R1-Distill-Qwen-1.5B
-        </p>
+        <div class="footer-top">
+            <div>
+                <p class="footer-title">Статус подключения</p>
+                <p><strong>Офлайн режим:</strong> <span id="offline-status">Проверка...</span></p>
+            </div>
+            <div>
+                <p class="footer-title">Технологии</p>
+                <p class="footer-note">DeepSeek-R1-Distill-Qwen-1.5B, WebLLM, Tesseract.js</p>
+            </div>
+        </div>
+        <p class="footer-bottom">© Решатель задач — учимся решать уверенно</p>
     </footer>
 
     <!-- Scripts -->
