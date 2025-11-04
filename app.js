@@ -77,10 +77,22 @@ async function saveSolution(problem, solution, recognizedText = null) {
         const transaction = db.transaction([STORE_NAME], 'readwrite');
         const store = transaction.objectStore(STORE_NAME);
 
+        let storedSolution = solution;
+        let evaluations = [];
+        let bestScore = null;
+
+        if (solution && typeof solution === 'object') {
+            storedSolution = solution.solution ?? '';
+            evaluations = Array.isArray(solution.evaluations) ? solution.evaluations : [];
+            bestScore = typeof solution.bestScore === 'number' ? solution.bestScore : null;
+        }
+
         const data = {
             problem,
-            solution,
+            solution: storedSolution,
             recognizedText,
+            evaluations,
+            bestScore,
             timestamp: new Date().toISOString()
         };
 
@@ -378,6 +390,8 @@ async function performOCR(imageData) {
 let currentProblem = '';
 let currentSolution = '';
 let currentRecognizedText = '';
+let currentSolutionDetails = null;
+let currentEvaluationResults = null;
 
 async function solveProblem() {
     const inputSection = document.getElementById('input-section');
@@ -411,16 +425,40 @@ async function solveProblem() {
 
         currentProblem = problemText;
 
-        // Генерация решения с помощью LLM
+        // Генерация нескольких решений с помощью LLM
         document.getElementById('processing-title').textContent = 'Решение задачи...';
         document.getElementById('processing-text').textContent = 'ИИ анализирует задачу';
 
-        const solution = await generateSolution(problemText);
-        currentSolution = solution;
+        const candidates = await runSelfConsistency(problemText);
+
+        // Проверка и оценка решений
+        document.getElementById('processing-text').textContent = 'Проверка полученных ответов';
+        const scoredCandidates = await scoreSolutions(candidates);
+
+        if (!scoredCandidates.length) {
+            throw new Error('Не удалось получить решение от ИИ. Попробуйте ещё раз.');
+        }
+
+        const sortedCandidates = scoredCandidates.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+        const bestCandidate = sortedCandidates[0];
+
+        currentSolution = bestCandidate.solution;
+        currentEvaluationResults = {
+            bestScore: bestCandidate.score ?? 0,
+            results: sortedCandidates.map(candidate => ({
+                ...candidate,
+                isBest: candidate === bestCandidate
+            }))
+        };
+        currentSolutionDetails = {
+            solution: bestCandidate.solution,
+            evaluations: currentEvaluationResults.results,
+            bestScore: currentEvaluationResults.bestScore
+        };
 
         // Отображение решения
         processingSection.classList.add('hidden');
-        showSolution(problemText, solution, currentRecognizedText);
+        showSolution(problemText, bestCandidate.solution, currentRecognizedText, currentEvaluationResults);
         solutionSection.classList.remove('hidden');
 
     } catch (error) {
@@ -431,7 +469,7 @@ async function solveProblem() {
     }
 }
 
-async function generateSolution(problemText) {
+async function generateGeminiSolution(problemText, { temperature = 0.7, seed = Date.now() } = {}) {
     if (!llmEngine) {
         throw new Error('Модель ИИ не загружена. Попробуйте перезагрузить страницу.');
     }
@@ -450,8 +488,9 @@ async function generateSolution(problemText) {
     try {
         const request = {
             messages: [{ role: 'user', content: prompt }],
-            temperature: 0.7,
+            temperature,
             max_tokens: 2000,
+            seed
         };
 
         if (llmSupportsModelParameter) {
@@ -468,7 +507,100 @@ async function generateSolution(problemText) {
     }
 }
 
-function showSolution(problem, solution, recognizedText) {
+async function generateSolution(problemText, options = {}) {
+    return generateGeminiSolution(problemText, options);
+}
+
+async function runSelfConsistency(problemText) {
+    const attempts = [
+        { temperature: 0.5, seed: Date.now() },
+        { temperature: 0.8, seed: Date.now() + 1 },
+        { temperature: 1.1, seed: Date.now() + 2 }
+    ];
+
+    const candidates = [];
+
+    for (let index = 0; index < attempts.length; index++) {
+        const attempt = attempts[index];
+        try {
+            const solution = await generateGeminiSolution(problemText, attempt);
+            candidates.push({
+                id: `attempt-${index + 1}`,
+                solution,
+                temperature: attempt.temperature,
+                seed: attempt.seed
+            });
+        } catch (error) {
+            console.error('Ошибка при генерации варианта решения:', error);
+            candidates.push({
+                id: `attempt-${index + 1}`,
+                solution: 'Не удалось получить ответ для этой попытки.',
+                temperature: attempt.temperature,
+                seed: attempt.seed
+            });
+        }
+    }
+
+    return candidates;
+}
+
+async function scoreSolutions(candidates) {
+    if (!llmEngine) {
+        throw new Error('Модель ИИ не загружена. Попробуйте перезагрузить страницу.');
+    }
+
+    const scored = [];
+
+    for (const candidate of candidates) {
+        const prompt = `Ты строгий проверяющий. Тебе дана задача и решение кандидата. Проверь корректность решения и оцени его по шкале от 0 до 100. В выводе укажи итоговый балл в формате "Оценка: <число>/100" и кратко прокомментируй ошибки или верные шаги.
+
+Задача:
+${currentProblem}
+
+Решение кандидата:
+${candidate.solution}
+
+Ответ:`;
+
+        const request = {
+            messages: [{ role: 'user', content: prompt }],
+            temperature: 0.2,
+            max_tokens: 700,
+        };
+
+        if (llmSupportsModelParameter) {
+            request.model = MODEL_ID;
+        }
+
+        try {
+            const response = await llmEngine.chat.completions.create(request);
+            const review = response.choices[0].message.content.trim();
+            const scoreMatch = review.match(/(100|[1-9]?\d)\s*(?:\/\s*100|из\s*100|балл(?:ов)?)/i);
+            let score = scoreMatch ? parseInt(scoreMatch[1], 10) : 0;
+            if (Number.isNaN(score)) {
+                score = 0;
+            }
+            score = Math.min(Math.max(score, 0), 100);
+
+            scored.push({
+                ...candidate,
+                score,
+                review
+            });
+        } catch (error) {
+            console.error('Ошибка проверки решения:', error);
+            scored.push({
+                ...candidate,
+                score: 0,
+                review: 'Не удалось получить оценку. Попробуйте ещё раз.'
+            });
+        }
+    }
+
+    return scored;
+}
+
+function showSolution(problem, solution, recognizedText, evaluationData = null) {
     // Показываем распознанный текст если есть
     if (recognizedText) {
         const recognizedSection = document.getElementById('recognized-text');
@@ -482,17 +614,90 @@ function showSolution(problem, solution, recognizedText) {
     // Форматирование решения
     const solutionContent = document.getElementById('solution-content');
     solutionContent.innerHTML = formatSolution(solution);
+
+    renderEvaluationResults(evaluationData);
 }
 
 function formatSolution(text) {
     // Простое форматирование текста
-    let formatted = text
+    const safeText = (text ?? '').toString();
+    if (!safeText.trim()) {
+        return '<p>Ответ отсутствует</p>';
+    }
+
+    let formatted = safeText
         .replace(/\n\n/g, '</p><p>')
         .replace(/\n/g, '<br>')
         .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
         .replace(/\*(.*?)\*/g, '<em>$1</em>');
 
     return `<p>${formatted}</p>`;
+}
+
+function renderEvaluationResults(evaluationData) {
+    const evaluationContainer = document.getElementById('evaluation-results');
+    const scoreElement = document.getElementById('evaluation-score');
+    const noteElement = document.getElementById('evaluation-note');
+    const alternativesList = document.getElementById('alternatives-list');
+
+    if (!evaluationContainer || !scoreElement || !alternativesList) {
+        return;
+    }
+
+    if (!evaluationData || !Array.isArray(evaluationData.results) || evaluationData.results.length === 0) {
+        evaluationContainer.classList.add('hidden');
+        alternativesList.innerHTML = '';
+        if (noteElement) {
+            noteElement.classList.add('hidden');
+            noteElement.textContent = '';
+        }
+        return;
+    }
+
+    evaluationContainer.classList.remove('hidden');
+    const bestScore = evaluationData.bestScore ?? 0;
+    scoreElement.textContent = `${bestScore}/100`;
+
+    if (noteElement) {
+        const allBelowHundred = evaluationData.results.every(result => (result.score ?? 0) < 100);
+        if (allBelowHundred) {
+            noteElement.textContent = 'Внимание: ни одна из попыток не получила 100/100. Проверьте решение вручную.';
+            noteElement.classList.remove('hidden');
+        } else {
+            noteElement.classList.add('hidden');
+            noteElement.textContent = '';
+        }
+    }
+
+    alternativesList.innerHTML = evaluationData.results.map((result, index) => {
+        const parts = [`Попытка ${index + 1}`];
+        if (typeof result.temperature !== 'undefined') {
+            parts.push(`температура ${result.temperature}`);
+        }
+        if (typeof result.score === 'number') {
+            parts.push(`${result.score}/100`);
+        }
+        if (result.isBest) {
+            parts.push('выбранное решение');
+        }
+
+        const summary = parts.join(' • ');
+
+        return `
+            <li class="alternative-item ${result.isBest ? 'selected' : ''}">
+                <details ${result.isBest ? 'open' : ''}>
+                    <summary>${escapeHtml(summary)}</summary>
+                    <div class="alternative-body">
+                        <div class="alternative-solution-text">${formatSolution(result.solution)}</div>
+                        <div class="alternative-review">
+                            <h4>Отзыв проверки</h4>
+                            <p>${escapeHtml(result.review || 'Без отзыва')}</p>
+                        </div>
+                    </div>
+                </details>
+            </li>
+        `;
+    }).join('');
 }
 
 function resetToInput() {
@@ -505,6 +710,8 @@ function resetToInput() {
     currentProblem = '';
     currentSolution = '';
     currentRecognizedText = '';
+    currentSolutionDetails = null;
+    currentEvaluationResults = null;
 }
 
 async function saveCurrentSolution() {
@@ -514,7 +721,13 @@ async function saveCurrentSolution() {
     }
 
     try {
-        await saveSolution(currentProblem, currentSolution, currentRecognizedText);
+        const solutionPayload = currentSolutionDetails ?? {
+            solution: currentSolution,
+            evaluations: currentEvaluationResults ? currentEvaluationResults.results : [],
+            bestScore: currentEvaluationResults ? currentEvaluationResults.bestScore : null
+        };
+
+        await saveSolution(currentProblem, solutionPayload, currentRecognizedText);
     } catch (error) {
         console.error('Ошибка сохранения:', error);
         showStatus('Ошибка сохранения в историю', 'error');
@@ -577,9 +790,34 @@ function showHistorySolution(solution) {
     currentProblem = solution.problem;
     currentSolution = solution.solution;
     currentRecognizedText = solution.recognizedText;
+    if (Array.isArray(solution.evaluations) && solution.evaluations.length > 0) {
+        const computedBestScore = typeof solution.bestScore === 'number'
+            ? solution.bestScore
+            : solution.evaluations.reduce((max, item) => Math.max(max, item.score ?? 0), 0);
+
+        const normalizedResults = solution.evaluations.map((item, index, array) => ({
+            ...item,
+            isBest: (item.score ?? 0) === computedBestScore &&
+                array.findIndex(candidate => (candidate.score ?? 0) === computedBestScore) === index
+        }));
+
+        currentEvaluationResults = {
+            bestScore: computedBestScore,
+            results: normalizedResults
+        };
+
+        currentSolutionDetails = {
+            solution: solution.solution,
+            evaluations: normalizedResults,
+            bestScore: computedBestScore
+        };
+    } else {
+        currentEvaluationResults = null;
+        currentSolutionDetails = null;
+    }
 
     document.getElementById('history-section').classList.add('hidden');
-    showSolution(solution.problem, solution.solution, solution.recognizedText);
+    showSolution(solution.problem, solution.solution, solution.recognizedText, currentEvaluationResults);
     document.getElementById('solution-section').classList.remove('hidden');
 }
 

@@ -457,6 +457,78 @@ body {
     font-family: 'Courier New', monospace;
 }
 
+.evaluation-results {
+    background: var(--bg-secondary);
+    border-radius: 8px;
+    padding: 1.25rem;
+    margin-bottom: 1.5rem;
+}
+
+.evaluation-results h3 {
+    margin-bottom: 1rem;
+    color: var(--accent);
+}
+
+.evaluation-summary {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+}
+
+.evaluation-score {
+    font-weight: 600;
+    font-size: 1.1rem;
+}
+
+.evaluation-note {
+    color: #d97706;
+    background: rgba(217, 119, 6, 0.1);
+    border-radius: 6px;
+    padding: 0.5rem 0.75rem;
+}
+
+.alternatives-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.alternative-item details {
+    background: var(--bg-primary);
+    border-radius: 8px;
+    padding: 0.75rem 1rem;
+    border: 1px solid transparent;
+    transition: border-color 0.2s ease;
+}
+
+.alternative-item.selected details {
+    border-color: var(--accent);
+}
+
+.alternative-item summary {
+    cursor: pointer;
+    font-weight: 600;
+}
+
+.alternative-body {
+    margin-top: 0.75rem;
+    display: grid;
+    gap: 0.75rem;
+}
+
+.alternative-solution-text p {
+    margin: 0;
+}
+
+.alternative-review h4 {
+    margin: 0 0 0.5rem;
+    color: var(--accent);
+}
+
 /* History */
 .history-header {
     display: flex;
